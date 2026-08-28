@@ -1,0 +1,28 @@
+# Env / secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Model checkpoints & data artifacts
+*.pt
+*.pth
+checkpoints/*
+!checkpoints/*.md
+data/
+logs/
+*.log
+models/
+
+# OS / editor
+.DS_Store
+.ipynb_checkpoints/
+.vscode/
+.idea/
