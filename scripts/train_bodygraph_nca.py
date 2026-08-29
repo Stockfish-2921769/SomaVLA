@@ -23,6 +23,7 @@ import torch
 from soma.bodygraph_nca import BodyGraphNCA
 from soma.skill_experts import SKILL_REGISTRY, SKILLS
 from soma.gates import loss_batch, loss_loop, gate_a
+from soma.physics import PHYSICS_CTX_DIM
 
 
 def main():
@@ -39,6 +40,13 @@ def main():
                          "rollin=closed-loop plant roll-in (drives to goal)")
     ap.add_argument("--skill", type=str, default=None,
                     help="train only this skill (default: all)")
+    ap.add_argument("--physics", action="store_true",
+                    help="train with the Coulomb physics modality channel + "
+                         "slip loss (Phase 6)")
+    ap.add_argument("--w-slip", type=float, default=2.0,
+                    help="slip-loss weight when --physics is on")
+    ap.add_argument("--hard-frac", type=float, default=0.5,
+                    help="fraction of physics samples from the m/μ>1 hard tail")
     args = ap.parse_args()
 
     rng = np.random.RandomState(args.seed)
@@ -50,7 +58,8 @@ def main():
     train_skills = [args.skill] if args.skill else SKILLS
     for skill in train_skills:
         print(f"\n═══ training expert: {skill} ═══")
-        model = BodyGraphNCA(k_steps=args.k_steps).to(device)
+        model = BodyGraphNCA(k_steps=args.k_steps,
+                             physics_ctx_dim=PHYSICS_CTX_DIM if args.physics else 0).to(device)
         opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
         lo, hi = SKILL_REGISTRY[skill]["duration"]
 
@@ -65,7 +74,9 @@ def main():
             opt.zero_grad()
             if args.mode == "rollin":
                 loss = loss_loop(model, device, rng, skill, T, args.batch,
-                                 drift_prob=dp)
+                                 drift_prob=dp,
+                                 physics=args.physics, w_slip=args.w_slip,
+                                 hard_frac=args.hard_frac)
             else:
                 loss = loss_batch(model, device, rng, skill, T, args.batch, drift_prob=dp)
             loss.backward()

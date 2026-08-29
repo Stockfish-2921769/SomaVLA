@@ -86,7 +86,7 @@ class _Update(nn.Module):
 class BodyGraphNCA(nn.Module):
     def __init__(self, k_steps=8, firing=0.5, morphogen_dim=MORPHOGEN_DIM,
                  attractor_lambda=0.1, dt=0.2, morphogen_decay=0.95, hidden=96,
-                 phase_dim=3):
+                 phase_dim=3, physics_ctx_dim=0):
         super().__init__()
         self.k_steps = k_steps
         self.firing = firing
@@ -95,9 +95,11 @@ class BodyGraphNCA(nn.Module):
         self.dt = dt
         self.morphogen_decay = morphogen_decay
         self.phase_dim = phase_dim
+        self.physics_ctx_dim = physics_ctx_dim
 
         self.perception = _Perception()
-        update_in = CELL_STATE_DIM + 40 + 1 + phase_dim  # own + agg + goal + phase
+        # own + agg + goal + phase (+ physics context broadcast channel)
+        update_in = CELL_STATE_DIM + 40 + 1 + phase_dim + physics_ctx_dim
         self.update = _Update(update_in, hidden=hidden)
 
         self.register_buffer("sigma", torch.tensor(SIGMA, dtype=torch.float32))
@@ -119,7 +121,7 @@ class BodyGraphNCA(nn.Module):
     # Single env step: K relaxation iterations
     # ─────────────────────────────────────────────────────────────────────
     def relax(self, reseed, goal_abs, alpha_mask, phase, morphogen=None,
-              record_morph=False):
+              physics_ctx=None, record_morph=False):
         """One env step. Returns absolute target [B,7] and morphogen_out [B,7,8].
 
         reseed:    [B,7] current absolute state (pos+rot+openness)
@@ -127,6 +129,10 @@ class BodyGraphNCA(nn.Module):
         alpha_mask:[B,7] 0/1 activity gate
         phase:     [B,3] cyclic phase + 1/duration
         morphogen: [B,7,8] warm-start from the previous env step (None → zeros)
+        physics_ctx: [B,P] broadcast physics modality channel (μ, m, F_n,
+                     slip_risk, contact one-hot); None → zeros when the model
+                     was built with a physics channel, ignored otherwise
+                     (physics_ctx_dim == 0 → identical to the Phase 5 net).
         """
         B = reseed.shape[0]
         dev, dtype = reseed.device, reseed.dtype
@@ -137,6 +143,14 @@ class BodyGraphNCA(nn.Module):
              else torch.zeros(B, N_CELLS, self.morphogen_dim, device=dev, dtype=dtype))
         ph = phase.unsqueeze(1).expand(B, N_CELLS, self.phase_dim)  # [B,7,3]
         gn = goal_norm.unsqueeze(-1)                               # [B,7,1]
+        ctx_b = None
+        if self.physics_ctx_dim:
+            if physics_ctx is None:
+                ctx_b = torch.zeros(B, N_CELLS, self.physics_ctx_dim,
+                                    device=dev, dtype=dtype)
+            else:
+                ctx_b = physics_ctx.unsqueeze(1).expand(
+                    B, N_CELLS, self.physics_ctx_dim)              # [B,7,P]
 
         mlog = [] if record_morph else None
         for _ in range(self.k_steps):
@@ -144,6 +158,8 @@ class BodyGraphNCA(nn.Module):
             msg = self.perception(s)                                # [B,7,40]
             agg = self._aggregate(msg)                              # [B,7,40]
             u = torch.cat([s, agg, gn, ph], dim=-1)                 # [B,7,54]
+            if ctx_b is not None:
+                u = torch.cat([u, ctx_b], dim=-1)                   # [B,7,54+P]
             d = self.update(u)                                      # [B,7,9] tanh-bound
             if self.training and self.firing < 1.0:
                 gate = alpha * (torch.rand(B, N_CELLS, 1, device=dev) < self.firing).to(dtype)
@@ -201,12 +217,19 @@ class BodyGraphNCA(nn.Module):
     # ─────────────────────────────────────────────────────────────────────
     def unroll_loop(self, states, goal_abs, alpha_mask, duration, plant_f,
                     drift_t0=None, drift_bias=None,
-                    pos_noise=0.001, rot_noise=0.01, open_noise=0.01):
+                    pos_noise=0.001, rot_noise=0.01, open_noise=0.01,
+                    physics_fn=None):
         """states: [B,T,7] (only states[:, 0] seeds the loop), goal_abs: [B,7],
         alpha_mask: [B,7], duration: scalar, plant_f: scalar actuator gain.
-        Returns targets [B,T,7]. Reseed evolves as reseed += f·(target−reseed)
-        + measurement noise; a mid-loop pos drift (drift_t0, drift_bias) is
-        optionally injected to teach re-convergence."""
+        Returns targets [B,T,7] (or (targets, slip_terms) when physics_fn is
+        given). Reseed evolves as reseed += f·(target−reseed) + measurement
+        noise; a mid-loop pos drift (drift_t0, drift_bias) is optionally
+        injected to teach re-convergence.
+
+        physics_fn(reseed[B,7], target[B,7], t) → (ctx[B,P], slip_term): the
+        physics modality for env step t is computed from the command applied
+        at step t−1 (one-step sensory lag, matching the sim), and the slip
+        term is collected for the training slip loss."""
         B, T, _ = states.shape
         dev, dt = states.device, states.dtype
         reseed = states[:, 0].clone()
@@ -216,13 +239,24 @@ class BodyGraphNCA(nn.Module):
         if drift_bias is not None:
             drift_bias = torch.as_tensor(drift_bias, device=dev, dtype=dt)
         targets = []
+        slip_terms = [] if physics_fn is not None else None
+        # The command that would have been applied before step 0 is identity
+        # (the initial state), so the first ctx sees zero commanded motion.
+        prev_reseed = states[:, 0].clone()
+        prev_target = states[:, 0].clone()
         for t in range(T):
             u = (t + 1) / duration
             phase = torch.tensor(
                 [np.cos(2 * np.pi * u), np.sin(2 * np.pi * u), 1.0 / duration],
                 device=dev, dtype=dt).unsqueeze(0).expand(B, -1)
-            target, morphogen = self.relax(reseed, goal_abs, alpha_mask, phase, morphogen)
+            ctx, slip_term = physics_fn(prev_reseed, prev_target, t) if physics_fn \
+                else (None, None)
+            target, morphogen = self.relax(reseed, goal_abs, alpha_mask, phase,
+                                           morphogen, physics_ctx=ctx)
             targets.append(target)
+            if slip_terms is not None:
+                slip_terms.append(slip_term)
+            old_reseed = reseed
             reseed = reseed + plant_f * (target - reseed)
             reseed = reseed + noise_sigma * torch.randn(B, N_CELLS, device=dev, dtype=dt)
             if drift_t0 is not None and drift_bias is not None and t == drift_t0:
@@ -233,7 +267,9 @@ class BodyGraphNCA(nn.Module):
             reseed = torch.cat([reseed[..., :6], reseed[..., 6:7].clamp(0.0, 1.0)],
                                dim=-1)
             morphogen = morphogen * self.morphogen_decay
-        return torch.stack(targets, dim=1)
+            prev_reseed, prev_target = old_reseed, target
+        targets = torch.stack(targets, dim=1)
+        return (targets, slip_terms) if physics_fn is not None else targets
 
     def count_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

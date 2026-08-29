@@ -92,10 +92,13 @@ class BodyGraphController:
         return self.skill == "release" and self.skill_complete()
 
     # ── control step ────────────────────────────────────────────
-    def step(self, state=None):
+    def step(self, state=None, physics_ctx=None):
         """One closed-loop control step → (target_pose np[7], info dict).
 
-        state: latest env observation (None → reuse internal state)."""
+        state: latest env observation (None → reuse internal state).
+        physics_ctx: [P] modality vector from the env (Coulomb physics); the
+        expert uses it to shape its command (Phase 6). None → zeros for
+        physics-capable experts, ignored for Phase 5 experts."""
         if state is not None:
             self.state = np.asarray(state, dtype=np.float32)
         info = {"skill": self.skill, "step_in_skill": self.step_in_skill,
@@ -116,9 +119,12 @@ class BodyGraphController:
         gl = torch.as_tensor(self.boundary["goal"], dtype=torch.float32, device=dev).unsqueeze(0)
         mk = torch.as_tensor(self.boundary["alpha_mask"], dtype=torch.float32, device=dev).unsqueeze(0)
         ph = torch.as_tensor(phase, dtype=torch.float32, device=dev).unsqueeze(0)
+        ctx_t = (torch.as_tensor(physics_ctx, dtype=torch.float32, device=dev).unsqueeze(0)
+                 if physics_ctx is not None else None)
         exp = self.experts[self.skill]
         with torch.no_grad():
-            target, morphogen = exp.relax(st, gl, mk, ph, self.morphogen)
+            target, morphogen = exp.relax(st, gl, mk, ph, self.morphogen,
+                                          physics_ctx=ctx_t)
             self.morphogen = morphogen * exp.morphogen_decay
         target_np = target[0].cpu().numpy()
         self.step_in_skill += 1

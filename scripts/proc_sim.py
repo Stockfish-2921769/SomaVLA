@@ -16,6 +16,7 @@ State layout: [pos(3) m, rot(3) axis-angle rad, openness(1) ∈ [0,1]].
 import numpy as np
 
 from soma.skill_experts import SKILL_REGISTRY, SKILLS
+from soma.physics import sample_physics
 
 # Workspace / placement constants (arbitrary but plausible LIBERO-like meters).
 CONTACT_Z = 0.52     # object on the table
@@ -109,17 +110,27 @@ def sample_skill(skill: str, rng: np.random.RandomState, T=None, scene=None):
     return states, goal, mask, T
 
 
-def make_batch(skill: str, T: int, batch: int, rng: np.random.RandomState):
-    """Vectorized batch builder: all samples share duration T."""
-    states, goals, masks = [], [], []
+def make_batch(skill: str, T: int, batch: int, rng: np.random.RandomState,
+               with_physics: bool = False, hard_frac: float = 0.0):
+    """Vectorized batch builder: all samples share duration T.
+
+    with_physics: additionally return physics[B,2] = (mu, mass) per sample —
+    the per-episode Coulomb scene params used by the Phase 6 slip loss.
+    hard_frac: fraction of physics samples drawn from the m/μ > 1 hard tail."""
+    states, goals, masks, phys = [], [], [], []
     for _ in range(batch):
         s, g, m, _ = sample_skill(skill, rng, T=T)
         states.append(s)
         goals.append(g)
         masks.append(m)
-    return (np.stack(states).astype(np.float32),
-            np.stack(goals).astype(np.float32),
-            np.stack(masks).astype(np.float32))
+        if with_physics:
+            phys.append(sample_physics(rng, hard_frac=hard_frac))
+    out = (np.stack(states).astype(np.float32),
+           np.stack(goals).astype(np.float32),
+           np.stack(masks).astype(np.float32))
+    if with_physics:
+        out = out + (np.array(phys, dtype=np.float32),)
+    return out
 
 
 def router_sample(rng: np.random.RandomState, skill=None):

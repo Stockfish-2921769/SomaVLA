@@ -68,7 +68,8 @@ def loss_batch(model, device, rng, skill, T, batch, w3=2.0, w2=1.0, beta=0.02,
 
 def loss_loop(model, device, rng, skill, T, batch, w3=2.0, wd=0.3, beta=0.02,
               drift_prob=0.5, plant_f_set=(0.3, 0.5, 1.0),
-              pos_noise=0.001, rot_noise=0.01, open_noise=0.01):
+              pos_noise=0.001, rot_noise=0.01, open_noise=0.01,
+              physics=False, w_slip=5.0, slip_safety=0.5, hard_frac=0.0):
     """Closed-loop roll-in training loss.
 
     Reseed only advances through a lagging plant (reseed += f·(target−reseed))
@@ -77,8 +78,20 @@ def loss_loop(model, device, rng, skill, T, batch, w3=2.0, wd=0.3, beta=0.02,
     learn to drive. plant_f is sampled per batch so the controller is robust
     to actuator lag; a persistent mid-loop pos drift (t0 ~ 30-70%) teaches
     re-convergence (gate b semantics) in the closed loop.
+
+    physics: enable the Coulomb slip modality. A per-episode (μ, m) is sampled
+    for every batch element, the physics context channel feeds the NCA each
+    step (from the previous step's command — one-step lag), and a slip loss
+    w_slip·mean(relu(slip_risk − 1)²) penalizes commanded steps whose inertial
+    load exceeds the friction capacity while the object is carried. This is
+    the gradient that teaches the network to grip tighter and move slower on
+    low-margin cells (implicit action planning).
     """
-    states, goals, masks = proc_sim.make_batch(skill, T, batch, rng)
+    if physics:
+        states, goals, masks, phy = proc_sim.make_batch(
+            skill, T, batch, rng, with_physics=True, hard_frac=hard_frac)
+    else:
+        states, goals, masks = proc_sim.make_batch(skill, T, batch, rng)
     states = torch.from_numpy(states).to(device)
     goals = torch.from_numpy(goals).to(device)
     masks = torch.from_numpy(masks).to(device)
@@ -88,10 +101,20 @@ def loss_loop(model, device, rng, skill, T, batch, w3=2.0, wd=0.3, beta=0.02,
     if rng.random() < drift_prob:
         drift_t0 = int(T * rng.uniform(0.3, 0.7))
         drift_bias = rng.uniform(-0.015, 0.015, (batch, 3)).astype(np.float32)
-    targets = model.unroll_loop(states, goals, masks, T, plant_f,
-                                drift_t0=drift_t0, drift_bias=drift_bias,
-                                pos_noise=pos_noise, rot_noise=rot_noise,
-                                open_noise=open_noise)
+    if physics:
+        from soma.physics import CoulombPhysics
+        phys = CoulombPhysics(torch.from_numpy(phy[:, 0]).to(device),
+                              torch.from_numpy(phy[:, 1]).to(device), skill)
+        targets, slip_terms = model.unroll_loop(
+            states, goals, masks, T, plant_f,
+            drift_t0=drift_t0, drift_bias=drift_bias,
+            pos_noise=pos_noise, rot_noise=rot_noise, open_noise=open_noise,
+            physics_fn=phys)
+    else:
+        targets = model.unroll_loop(
+            states, goals, masks, T, plant_f,
+            drift_t0=drift_t0, drift_bias=drift_bias,
+            pos_noise=pos_noise, rot_noise=rot_noise, open_noise=open_noise)
     term = w3 * masked_mse(targets[:, -1], goals, masks, sigma)
     # Dense hold-at-goal: once the reseed is near the goal the target must stay
     # on it for ALL phases. Terminal-only leaves the mid-roll-in hold steps
@@ -103,6 +126,13 @@ def loss_loop(model, device, rng, skill, T, batch, w3=2.0, wd=0.3, beta=0.02,
     jerk = targets[:, 2:] - 2 * targets[:, 1:-1] + targets[:, :-2]
     m = masks.unsqueeze(1)
     loss = loss + beta * ((m * (jerk / sigma)) ** 2).mean()
+    if physics:
+        from soma.physics import SLIP_THRESH
+        # Accumulated slip displacement over the rollout, hinged on the same
+        # drop threshold the eval sim uses (safety factor leaves eval margin).
+        slip_disp = torch.stack(slip_terms).sum(dim=0)            # [B] m
+        slip = w_slip * torch.relu(slip_disp / SLIP_THRESH - slip_safety).mean()
+        loss = loss + slip
     return loss
 
 

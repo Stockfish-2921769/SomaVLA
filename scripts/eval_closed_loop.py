@@ -35,13 +35,25 @@ from sim_env import SimEnv
 import proc_sim
 
 
-def load_experts(ckpt_dir, device):
+def load_experts(ckpt_dir, device, fallback_dir=None):
+    """Load per-skill experts, auto-detecting the Phase 6 physics channel (the
+    update MLP's in_features widen 54 → 63). 63-dim experts get physics_ctx=None
+    → zeros broadcast, so they run identically to 54-dim in this eval.
+    fallback_dir: used for skills not present in ckpt_dir (e.g. the Phase 6
+    checkpoints only hold the physics-trained grasp/lift/transport/place)."""
     from soma.bodygraph_nca import BodyGraphNCA
+    from soma.physics import PHYSICS_CTX_DIM
     experts = {}
     for skill in SKILLS:
         path = os.path.join(ckpt_dir, f"bodygraph_{skill}.pt")
-        m = BodyGraphNCA().to(device)
-        m.load_state_dict(torch.load(path, map_location=device, weights_only=True)["model"])
+        if not os.path.exists(path) and fallback_dir:
+            path = os.path.join(fallback_dir, f"bodygraph_{skill}.pt")
+        sd = torch.load(path, map_location=device, weights_only=True)["model"]
+        in_features = next(v.shape[1] for k, v in sd.items()
+                           if k == "update.net.0.weight")
+        phys = in_features == 63
+        m = BodyGraphNCA(physics_ctx_dim=PHYSICS_CTX_DIM if phys else 0).to(device)
+        m.load_state_dict(sd)
         experts[skill] = m
     return experts
 
@@ -103,6 +115,8 @@ def main():
     ap.add_argument("--robust", action="store_true", help="perturb mid-episode")
     ap.add_argument("--sweep-f", action="store_true")
     ap.add_argument("--ckpt-dir", type=str, default="checkpoints_rollin2")
+    ap.add_argument("--blind-dir", type=str, default="checkpoints_rollin2",
+                    help="fallback for skills not in --ckpt-dir (approach/release)")
     ap.add_argument("--router-ckpt", type=str, default="checkpoints/moe_router.pt")
     ap.add_argument("--perc-ckpt", type=str, default="checkpoints/perception.pt")
     ap.add_argument("--seed", type=int, default=0)
@@ -110,7 +124,7 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     rng = np.random.RandomState(args.seed)
-    experts = load_experts(args.ckpt_dir, device)
+    experts = load_experts(args.ckpt_dir, device, fallback_dir=args.blind_dir)
     router = StateRouter().to(device).eval()
     router.load_state_dict(torch.load(args.router_ckpt, map_location=device,
                                       weights_only=True)["model"])
