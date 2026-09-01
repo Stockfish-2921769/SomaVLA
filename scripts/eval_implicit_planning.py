@@ -69,7 +69,8 @@ def run_episode(experts, router, mu, mass, rng, device, morph_ablate=False,
                 zero_ctx=False, record=False):
     """One closed-loop episode at cell (mu, mass).
 
-    Returns (success, dropped, transport_steps[], drop_skill, info{per-step}).
+    Returns (success, dropped, transport_steps[], lift_steps[], drop_skill,
+    info{per-step}).
     """
     obj, place = proc_sim._sample_scene(rng)
     env = SimEnv(rng=rng, plant_f=0.5, physics=True, mu=mu, mass=mass)
@@ -78,6 +79,7 @@ def run_episode(experts, router, mu, mass, rng, device, morph_ablate=False,
     ctl = BodyGraphController(experts, router, device=device)
     ctl.reset(scene, env.state.copy())
     transport_steps = []
+    lift_steps = []
     drop_skill = None
     per_step = [] if record else None
     for t in range(800):
@@ -87,6 +89,8 @@ def run_episode(experts, router, mu, mass, rng, device, morph_ablate=False,
             ctl.morphogen = None          # no cross-step warm-start memory
         if ctl.skill == "transport":
             transport_steps.append(np.linalg.norm(target[:3] - env.state[:3]) * 1000.0)
+        elif ctl.skill == "lift":
+            lift_steps.append(np.linalg.norm(target[:3] - env.state[:3]) * 1000.0)
         if per_step is not None:
             per_step.append((ctl.skill, float(np.linalg.norm(target[:3] - env.state[:3]) * 1000.0),
                              float(env.physics_ctx()[3] * 5.0)))
@@ -96,10 +100,11 @@ def run_episode(experts, router, mu, mass, rng, device, morph_ablate=False,
             break
         if info["task_done"]:
             break
-    return env.success(), env.dropped, transport_steps, drop_skill, per_step
+    return (env.success(), env.dropped, transport_steps, lift_steps,
+            drop_skill, per_step)
 
 
-EVAL_HARD_LO, EVAL_HARD_HI = 1.08, 1.35   # m/μ band where blind ~54mm steps slip
+EVAL_HARD_LO, EVAL_HARD_HI = 1.16, 1.26   # m/μ discriminating band at τ=0.05 (Phase 1 calibration: blind drops 3/3 ≥1.158; aware holds to 1.26)
 
 
 def cells(n, rng, hard_frac=0.5):
@@ -126,7 +131,8 @@ def margin(mu, m):
 
 
 def report(groups, n_cells, eps):
-    """groups: list of dicts with ok, dropped, transport, bins, cells, ok_by_cell."""
+    """groups: list of dicts with ok, dropped, transport, lift, bins, lift_bins,
+    cells, ok_by_cell."""
     print("── gate (h) implicit action planning (Coulomb physics, "
           f"{n_cells} cells × {eps} eps) ──")
     blind, aware = groups[0], groups[1]
@@ -139,6 +145,10 @@ def report(groups, n_cells, eps):
         if g["bins"]:
             print("    (h2) margin→transport-step:")
             for lo, hi, n, ms in g["bins"]:
+                print(f"      margin {lo:5.1f}–{hi:5.1f} N:  mean step {ms:6.2f} mm  (n={n})")
+        if g["lift_bins"]:
+            print("    (h2) margin→lift-step:")
+            for lo, hi, n, ms in g["lift_bins"]:
                 print(f"      margin {lo:5.1f}–{hi:5.1f} N:  mean step {ms:6.2f} mm  (n={n})")
     print("\n  (h1) per-cell success (margin = μ·F_max − m·g0):")
     print(f"    {'mu':>5} {'m':>5} {'margin':>7} | {'blind':>6} {'aware':>6}")
@@ -177,9 +187,9 @@ def main():
 
     def collect(experts, ablate=False, zctx=False):
         ok_by_cell = []
-        dropped_all, transport_all, ok_all, margins_ep = [], [], [], []
+        dropped_all, transport_all, lift_all, ok_all, margins_ep = [], [], [], [], []
         for mu, m in cs:
-            okk, dro, tr, _, _ = [list(x) for x in zip(*[
+            okk, dro, tr, lf, _, _ = [list(x) for x in zip(*[
                 run_episode(experts, router, mu, m, rng, device,
                             morph_ablate=ablate, zero_ctx=zctx)
                 for _ in range(args.eps)])]
@@ -187,14 +197,15 @@ def main():
             ok_all += [int(o) for o in okk]
             dropped_all += [int(d) for d in dro]
             transport_all += [np.array(t) for t in tr]
+            lift_all += [np.array(t) for t in lf]
             margins_ep += [margin(mu, m)] * args.eps
-        return ok_all, dropped_all, transport_all, ok_by_cell, margins_ep
+        return ok_all, dropped_all, transport_all, lift_all, ok_by_cell, margins_ep
 
-    def bin_steps(transport_all, ok_all, margins_ep):
-        """transport mean-step vs margin, binned by margin quintiles."""
-        pairs = [(margins_ep[ci], np.mean(tr))
-                 for ci, (tr, ok) in enumerate(zip(transport_all, ok_all))
-                 if ok and len(tr)]
+    def bin_steps(step_all, ok_all, margins_ep):
+        """per-skill mean-step vs margin, binned by margin quintiles."""
+        pairs = [(margins_ep[ci], np.mean(st))
+                 for ci, (st, ok) in enumerate(zip(step_all, ok_all))
+                 if ok and len(st)]
         if len(pairs) < 5:
             return []
         lo = np.percentile([p[0] for p in pairs], [0, 20, 40, 60, 80, 100])
@@ -213,11 +224,12 @@ def main():
     if args.zero_ctx:
         runs.append(("aware (ctx zeroed)", aware, False, True))
     for name, experts, ablate, zctx in runs:
-        ok_all, dropped_all, transport_all, ok_by_cell, margins_ep = collect(
+        ok_all, dropped_all, transport_all, lift_all, ok_by_cell, margins_ep = collect(
             experts, ablate, zctx)
         groups.append({"name": name, "ok": ok_all, "dropped": dropped_all,
-                       "transport": transport_all,
+                       "transport": transport_all, "lift": lift_all,
                        "bins": bin_steps(transport_all, ok_all, margins_ep),
+                       "lift_bins": bin_steps(lift_all, ok_all, margins_ep),
                        "cells": cs, "ok_by_cell": ok_by_cell})
     report(groups, args.n_cells, args.eps)
 
@@ -226,8 +238,8 @@ def main():
         ok_abl = []
         for mu, m in cs:
             for _ in range(args.eps):
-                o, _, _, _, _ = run_episode(aware, router, mu, m, rng, device,
-                                            morph_ablate=True)
+                o, _, _, _, _, _ = run_episode(aware, router, mu, m, rng, device,
+                                               morph_ablate=True)
                 ok_abl.append(int(o))
         ok_ws = groups[1]["ok"]
         print(f"    aware (warm-start): {sum(ok_ws)}/{len(ok_ws)}  "

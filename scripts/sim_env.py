@@ -107,7 +107,12 @@ class SimEnv:
     def _coulomb_step(self, prev, target, s):
         """Advance the Coulomb contact state machine. Returns (obj_xy, final)."""
         g = float(s[6])
-        F_n, F_t, risk = numpy_slip_metrics(s, target, self.mu, self.mass,
+        # Honest per-step load: the peak pseudo-acceleration at the START of this
+        # step is k²·(target − prev) — the FULL commanded displacement, matching
+        # the training slip loss (reseed→target) and the MuJoCo replay. The
+        # post-plant remaining (target − s) is half a step at plant_f=0.5 and
+        # would under-charge the load ~2×.
+        F_n, F_t, risk = numpy_slip_metrics(prev, target, self.mu, self.mass,
                                             held=(self.contact_mode == GRASPED))
         held_req = self.mass * G0 / self.mu        # F_n needed to carry the weight
         dx = float(np.linalg.norm(target[:3] - prev[:3]))
@@ -182,8 +187,9 @@ class SimEnv:
             self.obj_final = final
 
         # Publish the modality for the controller's NEXT step: contact mode +
-        # the slip_risk the just-applied command produced.
-        _, _, risk = numpy_slip_metrics(s, target, self.mu, self.mass,
+        # the slip_risk the just-applied command produced (full commanded step,
+        # see _coulomb_step).
+        _, _, risk = numpy_slip_metrics(prev, target, self.mu, self.mass,
                                         held=(self.contact_mode == GRASPED))
         self.ctx = self._make_ctx(risk)
 

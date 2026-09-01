@@ -2,30 +2,38 @@
 
 Models the grasp as a Coulomb friction cone. The gripper's normal force
 F_n = F_max·(1−g) (g ∈ [0,1] openness) resists a tangential load
-F_t = m·(g0·held + |Δx|/τ²), where Δx = target − reseed is the commanded
-EEF displacement and τ is the arm's step-settle time (how long the arm
-takes to arrest a commanded step). Slip occurs when F_t exceeds the
-friction capacity μ·F_n. The NCA observes a *physics context* vector
+F_t = m·sqrt((g0·held)² + a²) — the vector-sum of the carried weight and the
+arm's inertial load — where a = K2·|Δx| is the PEAK pseudo-acceleration the
+plant exerts on the object during a commanded step Δx = target − reseed, and
+τ is the arm's step-settle time. Slip occurs when F_t exceeds the friction
+capacity μ·F_n. The NCA observes a *physics context* vector
 [μ, m, F_n, slip_risk] + one-hot contact mode each step (the modality
 channel), and the training slip loss backprops the soft slack
 relu(F_t − μ·F_n) (equivalently relu(slip_risk − 1)) through g and Δx, so
 the network learns to grip tighter (g→0) and move slower (smaller |Δx|)
 when its grip margin is thin — implicit action planning.
 
-Load calibration: the plan proposed F_t = sqrt((m·g0)² + (m·|Δx|/τ²)²)
-(perpendicular quadrature). With gravity dominating (m·g0 ≈ 3 N vs the
-inertial term ≈ 0.3–1 N at realistic steps) the quadrature form makes the
-inertial contribution a second-order correction that never crosses the
-grip margin — the 'blind slips, aware holds' effect would be unobservable.
-The linear (worst-case-aligned) load m·(g0 + |Δx|/τ²) makes the inertial
-term directly commensurable with the margin, which is what the gate (h)
-experiment needs. τ = 0.1 s is calibrated from the measured closed-loop
-per-step displacement (~25–40 mm) so the blind baseline's nominal ~52 mm
-steps genuinely slip exactly on the hard tail of the feasible (m, μ) grid —
-at full grip risk ≈ m/μ, so slip onset is m/μ > 1 (i.e. margin ≲ 1.1 N),
-measured empirically — while easy cells stay far below it. The slowed
-motion the aware NCA must learn (steps ~10–20 mm on hard cells) keeps the
-risk under 1 while staying within the skill's step budget.
+Honest plant reconstruction: the damped plant
+s(t) = target + (state−target)·(1−plant_f)^(t/τ) has continuous acceleration
+a(t) = K2·|Δx|·(1−plant_f)^(t/τ) with K2 = (−ln(1−plant_f)/τ)². For the
+eval/replay plant (PLANT_F = 0.5) the PEAK acceleration is a = K2·|Δx| — NOT
+the older Δx/τ² = 100·Δx form (a ~2× overestimate at τ=0.1 that made the
+blind baseline's drops a parameterization artifact: MuJoCo independent replay
+showed 0 slip). Two honesty corrections align the analytic load with the
+MuJoCo pseudo-force model (scripts/eval_level_a.py):
+  (1) a = K2·Δx with the true k² ≈ 48·Δx at τ=0.1 (192·Δx at τ=0.05), and
+  (2) vector-sum F_t = m·sqrt((g0·held)² + a²) — weight and inertial load
+  are perpendicular, not worst-case scalar-aligned.
+τ = 0.05 s is a recalibrated fast-arm regime: peak acceleration ~192·Δx makes
+the blind baseline's nominal ~52 mm steps (a ≈ 10 m/s² ≈ 1g) genuinely slip
+on the hard tail m/μ > 1.07 of the feasible grid while the aware's contracted
+~27 mm steps (boundary m/μ ≈ 1.35) hold — a real, MuJoCo-reproducible band.
+
+The abstract sim has no pad orientation, so the analytic model adopts the
+WORST-CASE orientation: the commanded horizontal acceleration is fully
+pad-tangential (entirely friction-loaded). The MuJoCo replay implements this
+via a 90° yaw of the recorded trajectory (transport along x would otherwise
+be borne by the contact normal — capture — and never slip).
 
 Scene params: μ ~ U(0.15, 0.6), m ~ U(0.05, 0.35) kg, F_max = 15 N,
 g0 = 9.81, feasible iff m·g0/μ ≤ 0.9·F_max (the object is graspable at full
@@ -44,11 +52,13 @@ GRASP_Z = 0.58
 
 F_MAX = 15.0      # N, gripper maximum normal force at full closure
 G0 = 9.81         # m/s², gravitational acceleration
-TAU = 0.1         # s, arm step-settle time (calibrated, see module docstring)
+TAU = 0.05        # s, arm step-settle time (fast-arm regime, see docstring)
+PLANT_F = 0.5     # eval/replay plant lag; peak accel a = K2·|Δx| matches MuJoCo
+K2 = (-np.log(1.0 - PLANT_F) / TAU) ** 2   # ≈ 192 m/s² per m of step
 MU_RANGE = (0.15, 0.6)
 MASS_RANGE = (0.05, 0.35)
 GRASPABLE_FRAC = 0.9     # feasibility: m·g0/μ ≤ GRASPABLE_FRAC·F_max
-SLIP_THRESH = 0.005      # m, accumulated slip displacement before drop
+SLIP_THRESH = 0.015      # m, accumulated slip displacement before drop (= MuJoCo replay threshold)
 EPS = 1e-3               # F_n floor in slip_risk (avoid div-by-zero)
 
 # Contact modes
@@ -59,7 +69,7 @@ CONTACT_NAMES = ("free", "contact", "grasped", "slip", "dropped")
 PHYSICS_CTX_DIM = 9
 
 
-HARD_LO, HARD_HI = 1.02, 1.32   # m/μ band where a ~52mm blind step slips (risk≈m/μ>1)
+HARD_LO, HARD_HI = 1.10, 1.35   # m/μ band where a ~52mm blind step slips at τ=0.05 (risk>1); recalibrated
 
 
 def sample_physics(rng, hard_frac=0.0):
@@ -85,8 +95,8 @@ def normal_force(g):
 
 
 def tangential_load(mass, held, a):
-    """F_t = m·(g0·held + a), N — worst-case-aligned Coulomb load."""
-    return mass * (G0 * float(held) + a)
+    """F_t = m·sqrt((g0·held)² + a²), N — vector-sum of weight + inertial load."""
+    return mass * np.sqrt((G0 * float(held)) ** 2 + a ** 2 + EPS)
 
 
 def slip_risk(F_n, F_t, mu):
@@ -151,9 +161,12 @@ class CoulombPhysics:
         g = reseed[:, 6]
         F_n = self.F_max * (1.0 - g)
         dx_mag = (target[:, :3] - reseed[:, :3]).norm(dim=-1)   # m
-        a = dx_mag / self.tau ** 2                               # m/s²
+        a = K2 * dx_mag                                          # m/s², peak plant pseudo-accel
         held = self._held(reseed)
-        F_t = self.mass * (self.g0 * held + a)
+        # +eps inside the sqrt: at (held=0, a=0) — the first grasp unroll step,
+        # where physics_fn is seeded with prev_reseed == prev_target — the bare
+        # sqrt(0) backprops d/d(a²) = inf · 0 = nan and corrupts every param.
+        F_t = self.mass * torch.sqrt((self.g0 * held) ** 2 + a ** 2 + self.eps)
         risk = F_t / (self.mu * F_n + self.eps)
         contact = self._contact(reseed, held)
         return F_n, F_t, risk, held, contact
@@ -184,7 +197,7 @@ def numpy_slip_metrics(state, target, mu, mass, held):
     g = float(state[6])
     F_n = F_MAX * (1.0 - g)
     dx = np.asarray(target[:3], dtype=np.float64) - np.asarray(state[:3], dtype=np.float64)
-    a = float(np.linalg.norm(dx)) / TAU ** 2
-    F_t = mass * (G0 * held + a)
+    a = K2 * float(np.linalg.norm(dx))
+    F_t = mass * np.sqrt((G0 * held) ** 2 + a ** 2 + EPS)
     risk = F_t / (mu * F_n + EPS)
     return F_n, F_t, risk

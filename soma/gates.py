@@ -69,7 +69,7 @@ def loss_batch(model, device, rng, skill, T, batch, w3=2.0, w2=1.0, beta=0.02,
 def loss_loop(model, device, rng, skill, T, batch, w3=2.0, wd=0.3, beta=0.02,
               drift_prob=0.5, plant_f_set=(0.3, 0.5, 1.0),
               pos_noise=0.001, rot_noise=0.01, open_noise=0.01,
-              physics=False, w_slip=5.0, slip_safety=0.5, hard_frac=0.0):
+              physics=False, w_slip=5.0, slip_safety=0.15, hard_frac=0.0):
     """Closed-loop roll-in training loss.
 
     Reseed only advances through a lagging plant (reseed += f·(target−reseed))
