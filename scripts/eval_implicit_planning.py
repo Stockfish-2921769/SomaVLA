@@ -107,17 +107,18 @@ def run_episode(experts, router, mu, mass, rng, device, morph_ablate=False,
 EVAL_HARD_LO, EVAL_HARD_HI = 1.16, 1.26   # m/μ discriminating band at τ=0.05 (Phase 1 calibration: blind drops 3/3 ≥1.158; aware holds to 1.26)
 
 
-def cells(n, rng, hard_frac=0.5):
+def cells(n, rng, hard_frac=0.5, band_lo=EVAL_HARD_LO, band_hi=EVAL_HARD_HI):
     """n feasible (mu, mass) cells. hard_frac of them drawn from the m/μ ∈
-    [EVAL_HARD_LO, EVAL_HARD_HI] extreme tail — the band where the blind
-    baseline's ~54mm steps genuinely slip (risk ≈ m/μ > 1 sustained long
-    enough to accumulate the drop threshold) and the aware expert's step
-    contraction must kick in hardest."""
+    [band_lo, band_hi] extreme tail — the band where the blind baseline's
+    ~54mm steps genuinely slip (risk ≈ m/μ > 1 sustained long enough to
+    accumulate the drop threshold) and the aware expert's step contraction
+    must kick in hardest. mu is capped so m = (m/μ)·mu stays in the feasible
+    mass range."""
     out = []
     while len(out) < n:
         if rng.random() < hard_frac:
-            mu = rng.uniform(0.2, 0.34)
-            m = rng.uniform(EVAL_HARD_LO, EVAL_HARD_HI) * mu
+            mu = rng.uniform(0.2, min(0.34, 0.35 / band_hi))
+            m = rng.uniform(band_lo, band_hi) * mu
         else:
             mu, m = sample_physics(rng)
         if 0.05 <= m <= 0.35 and m * G0 / mu <= GRASPABLE_FRAC * F_MAX:

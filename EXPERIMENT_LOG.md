@@ -199,3 +199,57 @@ gate (h) **outcome 主张（aware 收回复盲掉件）不被 MuJoCo 独立刚�
 honest-aware 的 grasp 技能在闭环中不再登记正式 NCA 完成（滑移损失把下降步收缩
 → duration 超时转 lift），但对象仍被功能抓取、episode 20/20 成功——良性行为
 偏移，非门禁回归。
+
+---
+
+## Phase 7 — 单一任务小型 VLA 的评估分布 + NCA 基线（2026-09-01）
+
+**新方向**（用户决策）：单一任务 VLA，参数目标 10⁶–10⁷，任务成功率要高于
+NCA 基线。两步走：先定基线（本段），后搭 SmolVLA-0.5B 微调基线对照。上一方向
+（CerebVLA/MoE-NCA）按用户要求不再作为主线介绍。
+
+**评估分布**（`scripts/eval_baseline_hard.py`，SmolVLA 将测同一分布）：
+- **硬分布**（per-episode）：hard-frac 0.5 抽样 m/μ∈[1.16,1.26] 判别带；
+  场景感知噪声 σ=3.7mm（SigLIP 级，控制器看到的 scene 加噪，env 用真值判成功）；
+  transport 首两步之间 ±10mm 中途推扰（transport 专家从扰动位重规划）。
+- **长程 transport 分布**：把记录的 transport 段连续重放 Kmax=60 次，让 MuJoCo
+  刚体滑移累积越过 15mm 掉件阈——回答"判别带在刚体物里下是否真实"。
+
+**裁决**：sim（闭环成功，obj 落在真 place 的 place_tol 内）+ MuJoCo 独立重放
+（worst-case yaw，FixedPadsReplay 伪力模型）。
+
+### NCA 基线测量（锚点，~10⁵ 参数）
+盲基线 114K / aware 118K 参数（6/4 个 body-graph NCA 专家 + MoE 路由器）。
+
+**硬分布**（12 cells × 3 eps；σ=3.7mm，推 ±10mm）：
+```
+agent              | sim ok   | sim drops | MuJoCo tseg | MuJoCo held | mj slip
+blind (no physics) | 25/36 69%|  11       | 36          | 36/36       | 0.08 mm
+aware (physics ctx)| 36/36 100%|  0        | 36          | 36/36       | 0.10 mm
+```
+- sim：aware 100% vs blind 69%；blind 的 11 掉件全在 m/μ≥1.16 单元（8 lift + 3
+  transport，lift 掉件为主——55mm 竖直步在硬尾也越过 risk>1）。
+- **MuJoCo 短程 transport：0/3 复现 blind 的 sim transport 掉件**（全部 HELD，
+  slip 0.08–0.10mm）——已知的诚实负面（解析滑移率伪差）在硬分布下依旧成立：
+  blind 的 sim 掉件主要不是刚体真实滑出。
+
+**长程 transport 分布**（band m/μ∈[1.26,1.35]，10 cells × 3 eps，×60 重放）：
+```
+agent              | dropped by Kmax | median cycle-to-drop | median max slip @Kmax
+blind (no physics) | 11/15 (73%)     | 28                   | 15.02 mm
+aware (physics ctx)|  0/15 (0%)      | none (< 60)          |  7.78 mm
+```
+- **MuJoCo 独立刚体物里下第一个干净的 outcome 复现**：长程携带下盲基线的 ~52–80mm
+  大步（risk 1.3–1.65，扰动后更大）让刚体滑移累积越过 15mm 阈（73% 段掉件），
+  aware 的收缩步（~30mm，risk<1 或略超）保持（0/15，中位 7.78mm < 阈）。
+- 率判别：盲中位 cycle-to-drop 28 vs aware >115（~4× 慢）——aware 在硬尾
+  (m/μ=1.35) 仍以 ~38mm 步略超 risk=1，弹性蠕滑 ~0.13mm/cycle，非完全免疫，但
+  比盲慢一个数量级量级。
+- **诚实要点**：aware 的 sim 硬分布优势部分不可 MuJoCo 复现（短程 slip-rate
+  伪差）；但长程分布把 outcome 主张救回——延长暴露后盲基线真实刚体滑出，aware
+  持稳。这是 SmolVLA 对照的第一个可复现 outcome 基准。
+
+### 待办
+SmolVLA-0.5B 数据生成（渲染图像 + 单任务指令 + action chunks）→ 微调 → 同一
+两个分布闭环/开环评估 → 成功率/参数曲线（NCA 锚点：盲 69%–73%掉、aware
+100%–0%掉，~0.1M；SmolVLA ~0.5B）。
