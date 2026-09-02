@@ -249,7 +249,51 @@ aware (physics ctx)|  0/15 (0%)      | none (< 60)          |  7.78 mm
   伪差）；但长程分布把 outcome 主张救回——延长暴露后盲基线真实刚体滑出，aware
   持稳。这是 SmolVLA 对照的第一个可复现 outcome 基准。
 
+### SigVLA-tiny 基线（决策 A 端到端 VLA，2.44M trainable / 95.4M total）
+HF 不可达、无 SmolVLA 权重，改用 **冻结 SigLIP-B16（92.9M，0 训练）+ 紧凑
+cross-attn 动作解码器（2.44M 训练）** 作为 SmolVLA-faithful 替代（接口
+image+state → 8 步绝对位姿 chunk，后续可换真 SmolVLA-0.5B）。已在 README 中
+诚实记录为"受限替代"而非改名。
+
+- 数据：aware-NCA 闭环 demo 2000 集（hard-frac 0.5，band [1.16,1.26]）→
+  11,141 个 (image, chunk[8,4], state[7]) 样本（`scripts/vla_data.py`）；
+  每维归一化（position std ~5mm vs open std 0.4，避免 open 主导 MSE）。
+- 训练：4000 步，AdamW + cosine，val MAE **7.6mm**（<< place_tol 20mm）。
+- 架构修过两次：`self.clip` 会被 nn.Module 自动注册（把 110M text tower 也算进
+  trainable 139.8M → 改成局部变量）；默认 d=768/3L/8H → d=256/2L/4H + 768→256
+  patch 投影，trainable 30M → **2.44M**。
+
+**同一硬/长程分布评估**（seed 0，12 cells × 3 eps；与 NCA 锚点同 harness）：
+```
+agent                    | sim ok (hard) | MuJoCo 短程 tseg | 长程×60 掉件 | median cycle-to-drop | median slip
+blind NCA  (0.11M)       | 25/36 (69%)   | 36/36 held       | 11/15 (73%)  | 28                   | 15.02 mm
+aware NCA  (0.12M)       | 36/36 (100%)  | 36/36 held       |  0/15 (0%)   | none                 |  7.78 mm
+VLA-tiny   (2.44M train) | 33/36 (92%)   | 33/33 held       | 14/14 (100%) | 10                   | 15.07 mm
+```
+- **短程 sim**：VLA 92%（3 timeouts，0 掉件）夹在盲 69% 与 aware 100% 之间——
+  感知噪声 σ=3.7mm 下仍能近似复现 aware 的短程闭环成功。
+- **margin→transport 步**：VLA 有弱单调收缩（高 margin 30.6mm → 低 margin
+  23.9mm）——从像素（尺寸→质量、色调→μ）学到了一部分载荷自适应，但收缩太弱、
+  不是 aware 的陡峭条件收缩。
+- **长程 MuJoCo：VLA 14/14 掉，cycle-to-drop 10——比盲基线（11/15，cycle 28）
+  还差 ~3×**。clean 分布（σ=0、无推）同样 15/15 掉（cycle 9）→ 与扰动无关。
+- **机理**：诊断记录显示 VLA 携带期 grip 正常（mean open 0.02–0.04，Fn≈0.97
+  F_max），但 **max|D| ≈ 37–52mm ≈ 2× mean|D|**（mean 23mm）——8 步 chunk 开环
+  执行 + plant 滞后（plant_f=0.5）→ EEF 落后于陈旧 chunk → 峰值命令位移周期性
+  越过 m/μ≈1.2 的 ~40mm risk 边界 → 刚体滑移每 cycle 累积。aware NCA 逐步闭环
+  重规划 + 每步 slip_risk 反馈保持步长紧致（max≈mean），是持稳的关键。
+- 逐步重规划变体（chunk-1）：闭环误差累积更糟——sim 58%、9 timeouts，仍掉
+  （cycle 6）。**两种接口（开环 chunk / 逐步）都复现不了 aware 的 outcome。**
+
+**诚实结论（决策 A 的基线数据点）**：端到端 tiny VLA 短程 sim 成功率可达到
+aware 水平（92% vs 100%），也学会了像素级的弱载荷自适应，但**没有复现 aware
+NCA 的 MuJoCo 有效 outcome 主张**——开环 chunk 的滞后峰值步在长程携带下真实
+滑出，比盲基线快 ~3×。根因是结构性：VLA 无 per-step 物理反馈（slip_risk），
+且 chunk 执行不随状态收敛。这**指向决策 B（分层：tiny VLA 规划器 + NCA 执行器）**
+或"端到端 VLA 需更紧闭环 / 加 slip 反馈"——两个方向在 A/B 对照中都需被测。
+
 ### 待办
-SmolVLA-0.5B 数据生成（渲染图像 + 单任务指令 + action chunks）→ 微调 → 同一
-两个分布闭环/开环评估 → 成功率/参数曲线（NCA 锚点：盲 69%–73%掉、aware
-100%–0%掉，~0.1M；SmolVLA ~0.5B）。
+1. （可选）VLA 改进迭代：滑动窗口重规划（chunk-2/4 折中）、delta-chunk 平滑目标、
+   slip 反馈通道——验证峰值步问题是否可缓解（当前报告的是不调参基线）。
+2. SmolVLA-0.5B 数据生成 → 微调 → 同一两分布评估（参数/成功率对照曲线：
+   NCA 0.1M / VLA-tiny 2.44M / SmolVLA 0.5B 三个点）。
