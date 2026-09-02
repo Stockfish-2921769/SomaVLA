@@ -373,6 +373,38 @@ oracle-aware 的 MuJoCo 有效 outcome**（36/36 hard sim，0/15 长程）——
 + 规划器头 266K ≈ 0.38M trainable（SigLIP-B16 92.9M 冻结推理），仍在 10⁶ 小参数量级。
 分层把"感知/规划"给 tiny VLA、把"安全执行"留给已持稳 MuJoCo 的 NCA → 两半各尽其长。
 
+### 决策 B 数据效率：数据预算 → 闭环 outcome（2026-09-02）
+小模型优势要落在数据轴上。扫规划器训练数据预算 N（固定 ~18 epochs、共享固定
+1200 张 val；`scripts/sweep_planner_data.py` + `scripts/report_planner_sweep.py`）：
+```
+N      场景MAEmm  obj  place   μ      m     hard m/μ rel  低估%    GPU训练
+ 1200    6.63    8.44  6.22  0.023 0.015     7.9%        16%      ~44s
+ 2400    5.18    6.35  5.12  0.019 0.013     6.1%        11%      ~82s
+ 4800    4.38    5.46  4.27  0.016 0.012     5.2%         7%     ~156s
+ 9600    3.61    4.48  3.51  0.015 0.011     4.7%         5%     ~290s
+10800    3.51    4.37  3.35  0.015 0.011     4.7%         6%      ~5min
+```
+（首版曲线因报表去归一化 bug 报 30mm 场景误差——模型 valMSE 其实与全量相当，
+修 bug 后为上方真值；`report_planner_sweep.py` 重读 ckpt 重算。）
+
+同批 cells 的闭环 outcome（12×3，MuJoCo 长程×60；oracle 控制行三次恒为
+36/36 + 0/15 slip 7.06mm → harness 确定性确认）：
+```
+N      hier sim ok   release掉  timeout   MuJoCo长程×60   median slip
+ 1200   27/36 (75%)     4        5          0/15           6.58mm
+ 2400   32/36 (89%)     4        0          0/15           5.75mm
+ 4800   31/36 (86%)     4        1          0/15           6.54mm
+10800   36/36 (100%)    0        0          0/15           9.00mm   (全量 best.pt)
+```
+**结论分成两条轴**：
+1. **安全轴（MuJoCo 长程）= 数据鲁棒**：低至 1.2k 场景（GPU ~44s）就 0/15 不滑
+   ——aware 执行器的保守收缩覆盖粗糙的 μ̂/m̂（N=1200 低估 56% 也不掉件）。
+2. **任务完成轴（sim 成功率）= 需更多数据**：低数据失败是 **release 掉 + timeout**
+   （场景错定位：N=1200 obĵ/placê 尾部 10–28mm，接近 place_tol 20mm → 释放点
+   偏、或超时），不是 transport 物理滑移。cliff 在 <2.4k，~100% 要到 ~10.8k。
+→ 小规划器在 ~2.4–5k 合成场景（1–3 min GPU 训练）即达可用闭环、MuJoCo 长程
+安全从 1.2k 就成立——这是与 0.5B 大模型对比时要量化的"数据/算力优势"曲线。
+
 ### 待办
 1. SmolVLA-0.5B 数据生成 → 微调 → 同一两分布评估（参数/成功率对照曲线：
    NCA 0.1M / VLA-tiny 2.44M / 分层 0.38M / SmolVLA 0.5B 四个点）。
