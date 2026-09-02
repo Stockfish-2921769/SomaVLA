@@ -331,8 +331,50 @@ grip 纪律）来弥合。
 cycle 28 快 ~3×），根因是 BC 学不到 aware 的携带期纪律（z 恒定 + 收缩）。这
 **指向决策 B（分层）** 或"端到端 VLA 需闭环训练 + slip 反馈"——A/B 对照中都需被测。
 
+### 决策 B：分层规划器 + aware-NCA 执行器（2026-09-02，PASS）
+用户选定决策 B，且规划器**场景 + 物理全部从像素读出**（不剩任何 env-truth oracle，
+与端到端 VLA-A 的对照才公平）。架构：tiny SigLIP 规划器头回归 6 向量
+`[obĵ_xy, placê_xy, μ̂, m̂]`，注入 aware-NCA 闭环中 NCA 基线收 oracle 的两处：
+- scene → `ctl.reset([obĵ,placê], state)`（路由 + 各技能 xy 目标）
+- physics_ctx → 9 维 ctx 用 (μ̂,m̂) 重建（aware 步长收缩的输入）
+
+env/MuJoCo 仍以 TRUE 物理 + TRUE place 裁决滑移/掉落/成功 → 若 μ̂/m̂ 低估载荷
+（m/μ̂ 过低）→ 执行器欠收缩 → 真实掉件。这是无 oracle 的诚实测试。
+
+**数据**（`scripts/planner_data.py`，12k 场景）：顶视 256 RGB 只画静态场景
+（绿 place 环 + 物体矩形，边长∝mass 12–28px、色调∝μ，与 VLA 渲染同编码），
+无 EEF 点（规划器是静态场景估计器）。场景分布 = cells()：hard-frac 0.5 落在
+m/μ 判别带 [1.16,1.26]，m/μ 全域 [0.09,1.37]。
+
+**训练**（`scripts/train_planner.py`）：冻结 SigLIP-B16 mean-pool → 0.27M MLP 头
+（LN→768→256→256→6），6000 步 lr 5e-4 + warmup200 + cosine，val MSE 0.0216。
+- val per-dim MAE：obj_x 4.37 / obj_y 2.90 / place_x 3.35 / place_y 3.43 mm
+  → **scene xy MAE 3.51 mm**；μ MAE 0.01、mass MAE 0.01
+- **m/μ rel err：mean 7.2%，hard-band 4.7%**；hard-band 低估(>10% 低) 6%
+  → 远在 ±10% 因果阈值内。
+
+**闭环评估**（`scripts/eval_hierarchical.py`，12 cells × 3 eps，MuJoCo 长程 ×60）：
+```
+── Oracle-aware（control：TRUE physics ctx，同批 cells）────────────
+  sim 36/36 (100%)  |  MuJoCo long-transport 0/15 掉 (median slip 7.06mm)
+── Decision-B（planner 从像素读 scene+physics）────────────────────
+  sim 36/36 (100%)  |  MuJoCo long-transport 0/15 掉 (median slip 9.00mm)
+  planner m/μ rel err 8.8% (mean)，under-estimate 31%（都 <10% 量级）
+```
+- Oracle 控制行把 aware 锚点（36/36、0/15）在脚本内复现 → harness 对齐。
+- B 行 12/12 cells 全 3/3，含最难的 m/μ 1.16–1.24、margin 0.6–0.9 cells；
+  各 hard cell μ̂ err 0.003–0.010、m̂ err 0.006–0.019（相对 ~1–6%），31% 的
+  低估都在伤害阈值（>10%）之下 → 收缩保持充分，长程 max slip 9.0mm < 15mm。
+- B 比 oracle 严格难（多 ~3.5mm 场景回归误差 + 物理误差），仍复现 oracle outcome。
+
+**对照结论**：分层系统（SigLIP 规划器 + aware-NCA 执行器）**在无 oracle 下复现了
+oracle-aware 的 MuJoCo 有效 outcome**（36/36 hard sim，0/15 长程）——这正是决策 A
+做不到的（VLA-A sim 33/36 92% 但长程 14/14 掉、cycle 10）。参数：NCA 执行器 118K
++ 规划器头 266K ≈ 0.38M trainable（SigLIP-B16 92.9M 冻结推理），仍在 10⁶ 小参数量级。
+分层把"感知/规划"给 tiny VLA、把"安全执行"留给已持稳 MuJoCo 的 NCA → 两半各尽其长。
+
 ### 待办
-1. （可选）VLA 改进迭代：滑动窗口重规划（chunk-2/4 折中）、delta-chunk 平滑目标、
-   slip 反馈通道——验证峰值步问题是否可缓解（当前报告的是不调参基线）。
-2. SmolVLA-0.5B 数据生成 → 微调 → 同一两分布评估（参数/成功率对照曲线：
-   NCA 0.1M / VLA-tiny 2.44M / SmolVLA 0.5B 三个点）。
+1. SmolVLA-0.5B 数据生成 → 微调 → 同一两分布评估（参数/成功率对照曲线：
+   NCA 0.1M / VLA-tiny 2.44M / 分层 0.38M / SmolVLA 0.5B 四个点）。
+2. （可选）把规划器接成真摄像头闭环（EEF 视野多帧）或扩展抓取扰动分布，
+   验证 B 的泛化边界——当前是静态顶视单帧。
