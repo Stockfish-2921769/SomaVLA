@@ -282,15 +282,54 @@ VLA-tiny   (2.44M train) | 33/36 (92%)   | 33/33 held       | 14/14 (100%) | 10 
   执行 + plant 滞后（plant_f=0.5）→ EEF 落后于陈旧 chunk → 峰值命令位移周期性
   越过 m/μ≈1.2 的 ~40mm risk 边界 → 刚体滑移每 cycle 累积。aware NCA 逐步闭环
   重规划 + 每步 slip_risk 反馈保持步长紧致（max≈mean），是持稳的关键。
-- 逐步重规划变体（chunk-1）：闭环误差累积更糟——sim 58%、9 timeouts，仍掉
-  （cycle 6）。**两种接口（开环 chunk / 逐步）都复现不了 aware 的 outcome。**
+- 逐步重规划变体（chunk-1，per-step 逐点匹配闭合，本 session 收敛后重测）：
+  ```
+  VLA-tiny chunk-1 | sim 21/36 (58%) | MuJoCo 短程 33/33 held (slip 1.77mm) |
+                    | 长程×60 13/13 掉 (cycle 10, 15.03mm) | margin→step 18→26mm
+  ```
+  回归精度好（val MAE **7.2mm**，chunk-8 是 7.6mm），但逐点重解码后 sim 反而
+  更差（58%，6 timeouts），长程依旧 13/13 掉（cycle 10）——与 chunk-8 相同。
 
-**诚实结论（决策 A 的基线数据点）**：端到端 tiny VLA 短程 sim 成功率可达到
-aware 水平（92% vs 100%），也学会了像素级的弱载荷自适应，但**没有复现 aware
-NCA 的 MuJoCo 有效 outcome 主张**——开环 chunk 的滞后峰值步在长程携带下真实
-滑出，比盲基线快 ~3×。根因是结构性：VLA 无 per-step 物理反馈（slip_risk），
-且 chunk 执行不随状态收敛。这**指向决策 B（分层：tiny VLA 规划器 + NCA 执行器）**
-或"端到端 VLA 需更紧闭环 / 加 slip 反馈"——两个方向在 A/B 对照中都需被测。
+### 对照实验：结构本身是否可用（2026-09-02）
+用户问："目前的结构本身是可用的吗，能否在对照实验中证实"。设计了两个控制实验，
+把"结构信息上限"与"BC 训练/闭环执行伪差"分开：
+
+**Control 1 — 感知半是否信息受限**（`scripts/probe_margin.py`）：
+冻结 SigLIP-B16 特征的 mean-pool → 回归 margin = μ·F_max − m·g0。
+- **val MAE 0.32 N**（margin std ~1.9N，判别带 0.6–1.1N）→ 编码器通道携带足够
+  的载荷物理信息（质量→尺寸、μ→色调在像素里可读）。**结构在感知端不瓶颈。**
+
+**Control 2 — 匹配闭合下闭环是否变安全**（chunk-1 per-step，本 session）：
+数据改为每步渲染/每步预测下一目标，评估也逐点重解码，闭合匹配；模型回归
+7.2mm MAE（好），但 **长程仍 13/13 掉（cycle 10），sim 58%（反而更差）**。
+→ 匹配闭合没有救回 outcome：chunk 滞后不是根因。
+
+**滑移机理分解**（`/tmp/diag_grip.py`，replay 级 grip 消融）：
+- 执行 grip 在携带期保持闭合（open 0.005–0.019，Fn/F_max 0.98–0.995）；把
+  Fn 强行为 F_max（全闭合）重放 cycle-to-drop 基本不变（c8↔c8, c8↔c9,
+  c11↔c12）→ **不是 grip 通道**。
+- 滑移来自命令运动本身：携带期 **maxD 水平尖峰 34–47mm**（m/μ≈1.2 下越过
+  ~40mm risk 边界）+ **携带期 z 振荡**（mean |Dz| 7.6–16.5mm；aware 携带期
+  保持 z 恒定）。z 下探瞬态松脱夹持、水平尖峰超摩擦容限 → 每 cycle 定向漂移
+  ~1.5mm，10 cycle 累计 15mm。
+- 机理本质是 **BC 协变量漂移**：模型在 aware-NCA 状态分布上训练，自驱动后状态
+  分布偏移 → 预测噪声反馈放大 → 轨迹退化为 z 振荡 + 步长尖峰。aware NCA 的
+  per-step slip_risk 反馈 + z 恒定 + 陡峭 margin 收缩，是它持稳的机制，BC 学不来。
+
+**诚实回答用户**：结构可分割地"可用"——感知半读得到 margin（C1，0.32N），
+短程回归精确（C2，7.2mm）；但**仅靠 open-loop BC 训练的闭环策略不复现 aware 的
+安全行为（z 恒定 + 载荷自适应收缩），匹配闭合后长程依然滑出**。失败在行为/目标
+层（BC + 协变量漂移），不在编码器信息层。这进一步支持决策 B（分层：tiny VLA
+规划器 + NCA 执行器）——执行器保留安全行为，VLA 只加感知/规划；若坚持决策 A，
+需闭环训练（DAgger/自举 rollout）、slip-loss 监督、或改变动作空间（delta 命令 +
+grip 纪律）来弥合。
+
+### 结论（决策 A 的基线数据点）
+端到端 tiny VLA 短程 sim 成功率可达到 aware 水平（chunk-8 92% vs 100%），
+学会了像素级弱载荷自适应，但**没有复现 aware NCA 的 MuJoCo 有效 outcome 主张**
+——无论开环 chunk 还是逐点匹配闭合，长程携带都真实滑出（cycle 10，比盲基线
+cycle 28 快 ~3×），根因是 BC 学不到 aware 的携带期纪律（z 恒定 + 收缩）。这
+**指向决策 B（分层）** 或"端到端 VLA 需闭环训练 + slip 反馈"——A/B 对照中都需被测。
 
 ### 待办
 1. （可选）VLA 改进迭代：滑动窗口重规划（chunk-2/4 折中）、delta-chunk 平滑目标、

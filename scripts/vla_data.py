@@ -18,7 +18,7 @@ Output (npz):
   images   [N, 3, 256, 256]  float32 RGB 0..1 (already SigLIP-normalized)
   chunks   [N, chunk_size, 4] float32  absolute target poses [x, y, z, open]
   states   [N, 7] float32  EEF pose at chunk start (pos, rot, open)
-  meta     [N, 4] float32  (obj_x, obj_y, place_x, place_y)
+  meta     [N, 6] float32  (obj_x, obj_y, place_x, place_y, mu, mass)
 """
 import argparse
 import os
@@ -107,7 +107,7 @@ def chunk_and_render(episode, chunk_size, siglip_normalize):
         images.append(arr)
         chunks.append(chunk)
         states.append(state.copy())
-        metas.append(np.concatenate([obj, place]))
+        metas.append(np.concatenate([obj, place, [mu, mass]]))
     return images, chunks, states, metas
 
 

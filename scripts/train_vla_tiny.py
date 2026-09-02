@@ -99,7 +99,7 @@ def main():
     ap.add_argument("--out", type=str, default="ckpts/vla_tiny")
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--batch", type=int, default=32)
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--chunk-size", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -143,7 +143,14 @@ def main():
 
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                             lr=args.lr, weight_decay=1e-4)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.steps)
+    # Linear warmup then cosine: prevents the early-step divergence seen when
+    # the per-step loss landscape is noisier (chunk-1 / small decoders).
+    warmup = min(200, args.steps // 10)
+    lin = torch.optim.lr_scheduler.LambdaLR(
+        opt, lambda s: min(1.0, (s + 1) / warmup))
+    cos = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.steps - warmup)
+    sched = torch.optim.lr_scheduler.SequentialLR(
+        opt, [lin, cos], milestones=[warmup])
 
     n = len(im)
     def batch(i):
