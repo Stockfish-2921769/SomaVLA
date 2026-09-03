@@ -205,8 +205,8 @@ honest-aware 的 grasp 技能在闭环中不再登记正式 NCA 完成（滑移�
 ## Phase 7 — 单一任务小型 VLA 的评估分布 + NCA 基线（2026-09-01）
 
 **新方向**（用户决策）：单一任务 VLA，参数目标 10⁶–10⁷，任务成功率要高于
-NCA 基线。两步走：先定基线（本段），后搭 SmolVLA-0.5B 微调基线对照。上一方向
-（CerebVLA/MoE-NCA）按用户要求不再作为主线介绍。
+NCA 基线。两步走：先定基线（本段），后搭 SmolVLA-0.5B 微调基线对照。上一方向（自包含的 MoE-NCA
+路线）按用户要求不再作为主线介绍。
 
 **评估分布**（`scripts/eval_baseline_hard.py`，SmolVLA 将测同一分布）：
 - **硬分布**（per-episode）：hard-frac 0.5 抽样 m/μ∈[1.16,1.26] 判别带；

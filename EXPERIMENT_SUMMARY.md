@@ -41,9 +41,8 @@ R8  /       SmolVLA-0.5B 真权重微调（与 R5 同数据同 harness）    ←
 
 ## R1 · Round 12（2026-08-26~28）— 架构 1.0：MoE 路由 + 同质 body-graph NCA
 
-**目标**：废弃旧 CerebVLA 路线（OpenVLA 7B + stateless NCA 小脑，Rounds 8–11 净负面），
-验证"慢速高层规划 + 快速自组织底层控制"。事件驱动、不锚定频率、纯涌现（无 cell-type
-embedding、无细胞分化）。
+**目标**：验证"慢速高层规划 + 快速自组织底层控制"的分层结构——事件驱动、不锚定频率、
+纯涌现（无 cell-type embedding、无细胞分化）。
 
 **架构状态**：`StateRouter`（低频，技能选择 + 边界条件）→ 每技能独立同质 NCA 专家
 （高频，7 EEF-pose DOF 细胞共享权重，15,905 参数）。细胞三通道 `[alpha|value|
@@ -190,8 +189,8 @@ onset 已验证）；**机制被复现但量级 modest**；h1 的 sim 能力（1
 
 ## R5 · Phase 7（2026-09-01/02）— 新方向：单一任务小型 VLA（决策 A 挑战）
 
-**目标**（用户决策）：单一任务 VLA，参数 10⁶–10⁷，成功率 > NCA 基线。旧方向
-（CerebVLA/MoE-NCA）不再作为主线介绍——NCA 执行器退居"要被打败的锚点"。
+**目标**（用户决策）：单一任务 VLA，参数 10⁶–10⁷，成功率 > NCA 基线。早期自包含的
+MoE-NCA 主线不再推进——NCA 执行器保留，作为"要被打败的锚点"。
 HF 不可达、无 SmolVLA 权重 → 决策 A 用 **SigVLA-tiny**（冻结 SigLIP-B16 92.9M +
 compact cross-attn 解码器，SmolVLA-faithful 受限替代）。
 
