@@ -405,8 +405,65 @@ N      hier sim ok   release掉  timeout   MuJoCo长程×60   median slip
 → 小规划器在 ~2.4–5k 合成场景（1–3 min GPU 训练）即达可用闭环、MuJoCo 长程
 安全从 1.2k 就成立——这是与 0.5B 大模型对比时要量化的"数据/算力优势"曲线。
 
+### A线：SmolVLA-0.5B 真实权重微调 → 同一闭环分布对照（2026-09-02/03，诚实负面）
+**目标**：Q1（同等数据/harness 下 0.5B 与 2.44M-tiny 的能力差）+ Q2（A 的 14/14
+长程掉件是不是"不够 scale"）。用真 lerobot/smolvla_base 权重微调到决策 A 数据
+（11,141 个 chunk-8 样本），在 eval_vla 同 harness 闭环（感知噪声 σ3.7mm、
+mid-carry push ±10mm、no-break-on-drop、MuJoCo 裁决）上打点。
+
+**infra + 数据冒烟（pass）**
+- 权重（smolvla_base + SmolVLM2-500M-Video-Instruct）经 hf-mirror 拉全、离线可载；
+  `smoke_smolvla.py` SMOKE_OK：450.05M total / 99.88M trainable，select_action 0.3s，
+  finite [1,6] action。
+- `train_smolvla.py` 微调（post-load 变异 cfg：chunk 8 / n_action_steps 8 / 单相机
+  camera1[3,256,256] / state[7] / action[4]；flow-matching loss 掩到真实动作维 [:4]；
+  数据 npz 图像 [-1,1]→*0.5+0.5 还原 [0,1] 喂入——与 tiny 同分布）。`--smoke`
+  64-sample overfit：loss 0.12→~0.04 → 反向/变异配置 OK。
+
+**全量微调（noise-free，6000 步 batch8 ≈4.5 epoch，val 0.0170）→ 闭环 NEGATIVE**
+- `eval_smolvla.py`（run_episode_vla/collect/report 从 eval_vla 逐字节继承）：
+  hard 分布 2-cell + 60 步 trace：**全部 timeout（0 success / 0 drop）**——机器人
+  停在样本质心 ~(0.486,0.455,z0.62) 悬停，从不开合到抓取。
+- **固定 state 场景 A/B（image 唯一变量，obj 在分布内）**：
+  - SmolVLA：obj 换 (0.40/0.45/0.47,·) → chunk 恒定 [0.481,0.455]、open 不闭合。
+  - SigVLA-tiny 同场景：chunk 追踪 object（c6 收敛到 obj xy、open→0）→ **tiny 从
+    像素定位、SmolVLA 不读图**。
+- **因果诊断链**（都做了）：
+  1. 冻结 VLM prefix embedding 线性探针：obj/place xy **R² 0.90–0.96**（MAE 5–9mm）
+     → 视觉信息在冻结塔里、线性可读。
+  2. 强制图像监督（合成 240 样本：固定 state、chunk=逼近 object、overfit）：
+     decode **corr(obj) 0.99、MAE 2–6mm** → 架构（flow-matching + frozen VLM）
+     本身完全能提取——不是结构做不到。
+  3. 离线 confound 定量：chunk0 目标从 state alone 线性 **R² 0.88/0.84/0.89/0.86**
+     (x/y/z/open)，full 8×4 chunk 0.535 → 11k 样本的 loss 被"保持姿势"自相关主导，
+     image 对 chunk0 的边际解释仅 ~12%、转移到后段/决策窗 → 100M expert 走
+     **state 捷径**拟合训练分布，不学闭环必需的像素→object 图。
+  4. 容量解释：2.44M 直接回归 tiny 受容量限制被迫经 image 泛化；100M flow-matching
+     expert 容量足够在 offline 上过拟合 state 捷径而不学图。
+
+**修正尝试：state-noise 增强（σ_xy 10mm，12k 步 batch16 ≈19 epoch，val 0.0155）**
+- 排除 LR 衰减卡死（probe +2000 步 restart val 0.017→0.0144，仍不定位）。
+- state-noise 后 val < noise-free 地板（0.0155<0.017）、grasp 相位改善（open 端位
+  0.23–0.49 闭合）——**但仍不定位 object**（固定-state 测试 chunk 依旧 ~0.483 恒值、
+  dist(c0,obj) 与 noise-free 相同）。闭环 smoke **0/6、全 timeout**。
+
+**结论（诚实、限定范围）**
+- 同一 11,141 样本 + 同一 harness：SigVLA-tiny（2.44M 直接回归）33/36 sim 且从像素
+  定位 object；SmolVLA-0.5B（99.88M trainable flow-matching expert-only 微调）无法
+  学像素→object 定位 → **0% sim、全 timeout**（含 state-noise 增强）。→ **Q1：
+  此任务/数据预算下小直接回归模型胜过 0.5B flow-matching BC**。
+- 不是"SmolVLA 架构做不到"（合成强制监督 corr 0.99）；是 **flow-matching 间接监督 +
+  over-capacity expert 在 confounded 小数据上取 state 捷径**、无法提取转移性视觉
+  map——与小模型直觉一致：大模型在该 small-data synthetic 场景下的容量是负担而非优势。
+- **Q2**：0.5B 的同一 BC 家族在 basic grasp 即失败（比 A 的 14/14 长程掉件更早、
+  更基础）→ 决策 A 的失败不是 scale；决策 B（0.27M 直接回归 planner + aware-NCA）
+  仍是无 oracle 的胜者。给定实现的限定：未穷尽数据规模（10× data）与 VLM 去冻结。
+- 文件：`smoke_smolvla.py` / `train_smolvla.py`(--smoke/--init/--state-noise-mm) /
+  `eval_smolvla.py`；ckpts/smolvla_ft(0.017) & smolvla_noisy(0.0155)（ckpt 存 norm=None，
+  eval 反归一化复用 ckpts/vla_tiny/best.pt 的 ch/st stats——已验证与 npz 同源一致）。
+
 ### 待办
-1. SmolVLA-0.5B 数据生成 → 微调 → 同一两分布评估（参数/成功率对照曲线：
-   NCA 0.1M / VLA-tiny 2.44M / 分层 0.38M / SmolVLA 0.5B 四个点）。
+1. ~~SmolVLA-0.5B 微调对照~~（完成，诚实负面见上）。可选跟进：10× 数据 / VLM
+   去冻结 / 直接回归式辅助监督，验证是否打破 state 捷径（预算内不划算，未做）。
 2. （可选）把规划器接成真摄像头闭环（EEF 视野多帧）或扩展抓取扰动分布，
    验证 B 的泛化边界——当前是静态顶视单帧。
