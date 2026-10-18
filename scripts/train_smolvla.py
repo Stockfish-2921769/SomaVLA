@@ -49,7 +49,7 @@ def tokenize_task(tok, text, max_len=48):
     return enc["input_ids"], enc["attention_mask"]
 
 
-def build_policy(device):
+def build_policy(device, task=TASK):
     """Base policy, config mutated to our single-camera / 7-state / 4-action
     chunk-8 task. Returns (policy, lang_ids, lang_mask)."""
     from lerobot.configs.types import FeatureType, PolicyFeature
@@ -73,7 +73,7 @@ def build_policy(device):
 
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(BACKBONE)
-    lang_ids, lang_mask = tokenize_task(tok, TASK)
+    lang_ids, lang_mask = tokenize_task(tok, task)
     return policy, lang_ids.to(device), lang_mask.to(device).bool()
 
 
@@ -114,6 +114,16 @@ def main():
                          "train state so the expert cannot rely on the state "
                          "shortcut and must read object location from the image "
                          "(closed-loop covariate-shift mitigation)")
+    ap.add_argument("--task", type=str, default=TASK,
+                    help="task-language prompt the policy is conditioned on")
+    ap.add_argument("--zero-state", action="store_true",
+                    help="zero the xy of the proprio state (train+eval) so the "
+                         "policy cannot copy the EEF xy from state and must "
+                         "read EEF+objects from the image. z/rot/grip are kept "
+                         "(a top-down image can't reveal height).")
+    ap.add_argument("--unfreeze-vlm", action="store_true",
+                    help="train the SmolVLM2 backbone too (default: expert-only). "
+                         "Ablation 2 for the state-shortcut failure.")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--out", type=str, default="ckpts/smolvla_ft")
     ap.add_argument("--norm-ckpt", type=str, default="ckpts/vla_tiny/best.pt",
@@ -129,8 +139,18 @@ def main():
     print(f"device {device}")
 
     t0 = time.time()
-    policy, lang_ids, lang_mask = build_policy(device)
+    policy, lang_ids, lang_mask = build_policy(device, args.task)
     print(f"[load base] {time.time()-t0:.1f}s")
+    if args.unfreeze_vlm:
+        ve = policy.model.vlm_with_expert
+        ve.train_expert_only = False
+        ve.freeze_vision_encoder = False
+        # set_requires_grad() only ever *sets False*; re-enable the backbone
+        # first, then let it re-apply the selective last-layer freeze.
+        for p_ in ve.vlm.parameters():
+            p_.requires_grad = True
+        ve.set_requires_grad()
+        print("[unfreeze] SmolVLM2 backbone now trainable")
     if args.init:
         ck = torch.load(args.init, map_location=device, weights_only=False)
         policy.load_state_dict(ck["state"], strict=False)
@@ -141,17 +161,27 @@ def main():
 
     d = np.load(args.data)
     im, ch, st = d["images"], d["chunks"], d["states"]
-    img01 = (im.astype(np.float32) * 0.5) + 0.5      # [-1,1] -> [0,1]
-    print(f"data {im.shape} chunks {ch.shape} states {st.shape}")
+    u8 = (im.dtype == np.uint8)
+    if u8:
+        img01 = im                                    # raw 0..255; /255 per batch
+    else:
+        img01 = (im.astype(np.float32) * 0.5) + 0.5   # [-1,1] -> [0,1]
+    print(f"data {im.shape} {im.dtype} chunks {ch.shape} states {st.shape}")
+    norm_out = {k: d[k] for k in ("ch_mean", "ch_std", "st_mean", "st_std")
+                if k in d.files} or None
 
     # per-dim raw proprioception noise sigma -> normalized space
     st_noise_sig = None
     if args.state_noise_mm > 0:
-        nck = torch.load(args.norm_ckpt, map_location="cpu",
-                         weights_only=False)["norm"]
-        st_std = np.asarray(nck["st_std"].cpu()) if torch.is_tensor(
-            nck["st_std"]) else np.asarray(nck["st_std"])
-        scale = np.array([1.0, 1.0, 0.6, 1.0, 1.0, 1.0, 0.8], np.float32)
+        if norm_out is not None and "st_std" in norm_out:
+            st_std = np.asarray(norm_out["st_std"], np.float32)
+        else:
+            nck = torch.load(args.norm_ckpt, map_location="cpu",
+                             weights_only=False)["norm"]
+            st_std = np.asarray(nck["st_std"].cpu()) if torch.is_tensor(
+                nck["st_std"]) else np.asarray(nck["st_std"])
+        # rot dims are constant -> st_std~0; never scale those.
+        scale = np.array([1.0, 1.0, 0.6, 0.0, 0.0, 0.0, 0.8], np.float32)
         st_noise_sig = (scale * (args.state_noise_mm / 1000.0)
                         / np.maximum(st_std, 1e-6)).astype(np.float32)
         print(f"state noise sigma (normalized): {np.round(st_noise_sig, 3)}")
@@ -177,12 +207,17 @@ def main():
 
     def make_batch(idx, noisy=True):
         j = idx[np.random.randint(len(idx), size=args.batch)]
-        b_img = torch.from_numpy(img01[j]).to(device)
+        b_img = img01[j]
+        if u8:
+            b_img = b_img.astype(np.float32) / 255.0
+        b_img = torch.from_numpy(b_img).to(device)
         b_st = st[j].copy()
         if noisy and st_noise_sig is not None:
             b_st = (b_st + np.random.normal(0.0, st_noise_sig,
                                             b_st.shape).astype(np.float32))
         b_st = torch.from_numpy(b_st).to(device)
+        if args.zero_state:
+            b_st = torch.cat([torch.zeros_like(b_st[:, :2]), b_st[:, 2:]], 1)
         b_ch = torch.from_numpy(ch[j]).to(device)
         return {
             "observation.images.camera1": b_img,
@@ -220,9 +255,9 @@ def main():
                 best_val = vl
                 sd = {k: v.detach().cpu()
                       for k, v in policy.state_dict().items()
-                      if "vlm_with_expert.vlm" not in k}
+                      if args.unfreeze_vlm or "vlm_with_expert.vlm" not in k}
                 torch.save({"state": sd, "step": s,
-                            "norm": None,
+                            "norm": norm_out,
                             "args": vars(args)},
                            os.path.join(args.out, "best.pt"))
             print(f"{s:>6} {loss.item():>9.4f} {vl:>9.4f} "

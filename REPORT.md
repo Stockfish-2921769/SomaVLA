@@ -3,6 +3,9 @@
 > 项目代号 **SomaVLA**（本仓库）。日期：2026-09-01。
 > 本报告覆盖 Round 12 新架构的全部已完成的验证阶段（门禁 a–h）、闭环组装、
 > 以及 MuJoCo 独立物理交叉验证（Level A / A+）的诚实结论。
+>
+> 后续报告：空间规划场（R9）见 `EXPERIMENT_SUMMARY.md`；把规划场注入动作专家的
+> 成本/可行性评估见 `REPORT_FIELD_INJECTION.md`。
 
 ---
 
