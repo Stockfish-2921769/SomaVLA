@@ -1,0 +1,241 @@
+16 runs
+
+  vec_gt-plan_s0                70.0%  placed 2.56  wall 10.0  steps 1000  visits 1254/2083
+  vec_gt-plan_s1                79.0%  placed 2.70  wall 9.7  steps 945  visits 1318/2071
+  vec_no-field_s0               87.0%  placed 2.81  wall 12.9  steps 789  visits 1312/1921
+  vec_no-field_s1               88.0%  placed 2.83  wall 6.8  steps 771  visits 1260/1862
+  vec_random-plan_s0            62.0%  placed 2.45  wall 12.8  steps 1054  visits 1216/2104
+  vec_random-plan_s1            82.0%  placed 2.75  wall 7.7  steps 902  visits 1324/2037
+  vec_swap-random_gt-plan_s0    69.0%  placed 2.55  wall 6.6  steps 1000  visits 1264/2087  dev 0.360
+  vec_swap-random_gt-plan_s1    82.5%  placed 2.75  wall 12.8  steps 894  visits 1295/1999  dev 0.402
+  vec_swap-wrong_gt-plan_s0     68.0%  placed 2.50  wall 6.1  steps 1034  visits 1230/2099  dev 0.375
+  vec_swap-wrong_gt-plan_s1     76.0%  placed 2.67  wall 6.4  steps 949  visits 1263/2024  dev 0.363
+  vec_teacher_gt-plan_s0       100.0%  placed 3.00  wall 1.1  steps 213  visits 382/382
+  vec_teacher_gt-plan_s1       100.0%  placed 3.00  wall 0.8  steps 212  visits 379/379
+  vec_wrong-goal_s0             71.5%  placed 2.53  wall 23.6  steps 991  visits 1326/2138
+  vec_wrong-goal_s1             81.5%  placed 2.69  wall 5.2  steps 845  visits 1287/1940
+  vec_zero-plan_s0              71.0%  placed 2.59  wall 17.3  steps 956  visits 1296/2064
+  vec_zero-plan_s1              76.5%  placed 2.65  wall 13.2  steps 920  visits 1226/1976
+
+main vec_gt-plan_s0 vs vec_zero-plan_s0:  70.0% vs  71.0%  gain  -1.0 pp  boot95 [-9.5,+7.5]  discordant +36/-38  McNemar(one-sided) p=0.6362
+
+pooled gt-plan vs zero-plan (seeds [0, 1])
+  s0 [pre-registered]:  70.0% vs  71.0%  gain  -1.0 pp  discordant +36/-38  one-sided p=0.6362
+  s1:  79.0% vs  76.5%  gain  +2.5 pp  discordant +39/-34  one-sided p=0.3200
+  pooled: discordant +75/-72  gain  +0.8 pp  boot95 [-5.0,+6.2]  one-sided p=0.4345
+
+all pairwise (secondary; Holm across these):
+vec_gt-plan_s0 vs vec_gt-plan_s1:  70.0% vs  79.0%  gain  -9.0 pp  boot95 [-17.5,+0.0]  discordant +33/-51  McNemar(two-sided) p=0.0630
+vec_gt-plan_s0 vs vec_no-field_s0:  70.0% vs  87.0%  gain -17.0 pp  boot95 [-24.5,-9.5]  discordant +14/-48  McNemar(two-sided) p=0.0000
+vec_gt-plan_s0 vs vec_no-field_s1:  70.0% vs  88.0%  gain -18.0 pp  boot95 [-25.5,-10.5]  discordant +14/-50  McNemar(two-sided) p=0.0000
+vec_gt-plan_s0 vs vec_random-plan_s0:  70.0% vs  62.0%  gain  +8.0 pp  boot95 [-0.5,+16.5]  discordant +46/-30  McNemar(two-sided) p=0.0846
+vec_gt-plan_s0 vs vec_random-plan_s1:  70.0% vs  82.0%  gain -12.0 pp  boot95 [-21.0,-3.0]  discordant +30/-54  McNemar(two-sided) p=0.0116
+vec_gt-plan_s0 vs vec_swap-random_gt-plan_s0:  70.0% vs  69.0%  gain  +1.0 pp  boot95 [-7.5,+9.5]  discordant +39/-37  McNemar(two-sided) p=0.9088
+vec_gt-plan_s0 vs vec_swap-random_gt-plan_s1:  70.0% vs  82.5%  gain -12.5 pp  boot95 [-20.5,-4.5]  discordant +23/-48  McNemar(two-sided) p=0.0041
+vec_gt-plan_s0 vs vec_swap-wrong_gt-plan_s0:  70.0% vs  68.0%  gain  +2.0 pp  boot95 [-7.0,+11.0]  discordant +46/-42  McNemar(two-sided) p=0.7493
+vec_gt-plan_s0 vs vec_swap-wrong_gt-plan_s1:  70.0% vs  76.0%  gain  -6.0 pp  boot95 [-14.0,+2.0]  discordant +27/-39  McNemar(two-sided) p=0.1753
+vec_gt-plan_s0 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_gt-plan_s0 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_gt-plan_s0 vs vec_wrong-goal_s0:  70.0% vs  71.5%  gain  -1.5 pp  boot95 [-10.0,+7.0]  discordant +35/-38  McNemar(two-sided) p=0.8151
+vec_gt-plan_s0 vs vec_wrong-goal_s1:  70.0% vs  81.5%  gain -11.5 pp  boot95 [-20.0,-3.0]  discordant +27/-50  McNemar(two-sided) p=0.0117
+vec_gt-plan_s0 vs vec_zero-plan_s0:  70.0% vs  71.0%  gain  -1.0 pp  boot95 [-9.5,+7.5]  discordant +36/-38  McNemar(two-sided) p=0.9076
+vec_gt-plan_s0 vs vec_zero-plan_s1:  70.0% vs  76.5%  gain  -6.5 pp  boot95 [-15.5,+2.5]  discordant +34/-47  McNemar(two-sided) p=0.1821
+vec_gt-plan_s1 vs vec_no-field_s0:  79.0% vs  87.0%  gain  -8.0 pp  boot95 [-15.0,-1.0]  discordant +18/-34  McNemar(two-sided) p=0.0365
+vec_gt-plan_s1 vs vec_no-field_s1:  79.0% vs  88.0%  gain  -9.0 pp  boot95 [-16.0,-2.0]  discordant +18/-36  McNemar(two-sided) p=0.0198
+vec_gt-plan_s1 vs vec_random-plan_s0:  79.0% vs  62.0%  gain +17.0 pp  boot95 [+8.0,+25.5]  discordant +59/-25  McNemar(two-sided) p=0.0003
+vec_gt-plan_s1 vs vec_random-plan_s1:  79.0% vs  82.0%  gain  -3.0 pp  boot95 [-11.0,+5.0]  discordant +31/-37  McNemar(two-sided) p=0.5446
+vec_gt-plan_s1 vs vec_swap-random_gt-plan_s0:  79.0% vs  69.0%  gain +10.0 pp  boot95 [+1.5,+18.5]  discordant +48/-28  McNemar(two-sided) p=0.0286
+vec_gt-plan_s1 vs vec_swap-random_gt-plan_s1:  79.0% vs  82.5%  gain  -3.5 pp  boot95 [-11.0,+4.5]  discordant +27/-34  McNemar(two-sided) p=0.4426
+vec_gt-plan_s1 vs vec_swap-wrong_gt-plan_s0:  79.0% vs  68.0%  gain +11.0 pp  boot95 [+3.0,+19.0]  discordant +47/-25  McNemar(two-sided) p=0.0128
+vec_gt-plan_s1 vs vec_swap-wrong_gt-plan_s1:  79.0% vs  76.0%  gain  +3.0 pp  boot95 [-5.5,+11.0]  discordant +39/-33  McNemar(two-sided) p=0.5560
+vec_gt-plan_s1 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_gt-plan_s1 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_gt-plan_s1 vs vec_wrong-goal_s0:  79.0% vs  71.5%  gain  +7.5 pp  boot95 [-1.0,+15.5]  discordant +42/-27  McNemar(two-sided) p=0.0912
+vec_gt-plan_s1 vs vec_wrong-goal_s1:  79.0% vs  81.5%  gain  -2.5 pp  boot95 [-10.0,+5.0]  discordant +26/-31  McNemar(two-sided) p=0.5966
+vec_gt-plan_s1 vs vec_zero-plan_s0:  79.0% vs  71.0%  gain  +8.0 pp  boot95 [-0.0,+16.0]  discordant +44/-28  McNemar(two-sided) p=0.0764
+vec_gt-plan_s1 vs vec_zero-plan_s1:  79.0% vs  76.5%  gain  +2.5 pp  boot95 [-6.0,+11.0]  discordant +39/-34  McNemar(two-sided) p=0.6400
+vec_no-field_s0 vs vec_no-field_s1:  87.0% vs  88.0%  gain  -1.0 pp  boot95 [-7.5,+5.5]  discordant +20/-22  McNemar(two-sided) p=0.8776
+vec_no-field_s0 vs vec_random-plan_s0:  87.0% vs  62.0%  gain +25.0 pp  boot95 [+17.0,+33.0]  discordant +63/-13  McNemar(two-sided) p=0.0000
+vec_no-field_s0 vs vec_random-plan_s1:  87.0% vs  82.0%  gain  +5.0 pp  boot95 [-2.0,+12.0]  discordant +30/-20  McNemar(two-sided) p=0.2026
+vec_no-field_s0 vs vec_swap-random_gt-plan_s0:  87.0% vs  69.0%  gain +18.0 pp  boot95 [+10.0,+26.0]  discordant +54/-18  McNemar(two-sided) p=0.0000
+vec_no-field_s0 vs vec_swap-random_gt-plan_s1:  87.0% vs  82.5%  gain  +4.5 pp  boot95 [-1.5,+10.5]  discordant +25/-16  McNemar(two-sided) p=0.2110
+vec_no-field_s0 vs vec_swap-wrong_gt-plan_s0:  87.0% vs  68.0%  gain +19.0 pp  boot95 [+11.0,+27.0]  discordant +56/-18  McNemar(two-sided) p=0.0000
+vec_no-field_s0 vs vec_swap-wrong_gt-plan_s1:  87.0% vs  76.0%  gain +11.0 pp  boot95 [+3.0,+19.0]  discordant +43/-21  McNemar(two-sided) p=0.0081
+vec_no-field_s0 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_no-field_s0 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_no-field_s0 vs vec_wrong-goal_s0:  87.0% vs  71.5%  gain +15.5 pp  boot95 [+7.5,+23.5]  discordant +51/-20  McNemar(two-sided) p=0.0003
+vec_no-field_s0 vs vec_wrong-goal_s1:  87.0% vs  81.5%  gain  +5.5 pp  boot95 [-1.5,+12.5]  discordant +31/-20  McNemar(two-sided) p=0.1608
+vec_no-field_s0 vs vec_zero-plan_s0:  87.0% vs  71.0%  gain +16.0 pp  boot95 [+8.0,+24.0]  discordant +50/-18  McNemar(two-sided) p=0.0001
+vec_no-field_s0 vs vec_zero-plan_s1:  87.0% vs  76.5%  gain +10.5 pp  boot95 [+3.0,+18.0]  discordant +42/-21  McNemar(two-sided) p=0.0111
+vec_no-field_s1 vs vec_random-plan_s0:  88.0% vs  62.0%  gain +26.0 pp  boot95 [+17.5,+34.0]  discordant +68/-16  McNemar(two-sided) p=0.0000
+vec_no-field_s1 vs vec_random-plan_s1:  88.0% vs  82.0%  gain  +6.0 pp  boot95 [-1.0,+13.0]  discordant +33/-21  McNemar(two-sided) p=0.1337
+vec_no-field_s1 vs vec_swap-random_gt-plan_s0:  88.0% vs  69.0%  gain +19.0 pp  boot95 [+11.5,+26.5]  discordant +52/-14  McNemar(two-sided) p=0.0000
+vec_no-field_s1 vs vec_swap-random_gt-plan_s1:  88.0% vs  82.5%  gain  +5.5 pp  boot95 [-1.0,+12.5]  discordant +30/-19  McNemar(two-sided) p=0.1524
+vec_no-field_s1 vs vec_swap-wrong_gt-plan_s0:  88.0% vs  68.0%  gain +20.0 pp  boot95 [+12.0,+28.0]  discordant +57/-17  McNemar(two-sided) p=0.0000
+vec_no-field_s1 vs vec_swap-wrong_gt-plan_s1:  88.0% vs  76.0%  gain +12.0 pp  boot95 [+4.5,+19.5]  discordant +42/-18  McNemar(two-sided) p=0.0027
+vec_no-field_s1 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_no-field_s1 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_no-field_s1 vs vec_wrong-goal_s0:  88.0% vs  71.5%  gain +16.5 pp  boot95 [+9.5,+23.5]  discordant +45/-12  McNemar(two-sided) p=0.0000
+vec_no-field_s1 vs vec_wrong-goal_s1:  88.0% vs  81.5%  gain  +6.5 pp  boot95 [-0.5,+13.5]  discordant +34/-21  McNemar(two-sided) p=0.1048
+vec_no-field_s1 vs vec_zero-plan_s0:  88.0% vs  71.0%  gain +17.0 pp  boot95 [+9.0,+24.5]  discordant +52/-18  McNemar(two-sided) p=0.0001
+vec_no-field_s1 vs vec_zero-plan_s1:  88.0% vs  76.5%  gain +11.5 pp  boot95 [+3.5,+19.5]  discordant +46/-23  McNemar(two-sided) p=0.0076
+vec_random-plan_s0 vs vec_random-plan_s1:  62.0% vs  82.0%  gain -20.0 pp  boot95 [-29.0,-11.0]  discordant +24/-64  McNemar(two-sided) p=0.0000
+vec_random-plan_s0 vs vec_swap-random_gt-plan_s0:  62.0% vs  69.0%  gain  -7.0 pp  boot95 [-15.5,+1.5]  discordant +30/-44  McNemar(two-sided) p=0.1302
+vec_random-plan_s0 vs vec_swap-random_gt-plan_s1:  62.0% vs  82.5%  gain -20.5 pp  boot95 [-28.5,-12.0]  discordant +19/-60  McNemar(two-sided) p=0.0000
+vec_random-plan_s0 vs vec_swap-wrong_gt-plan_s0:  62.0% vs  68.0%  gain  -6.0 pp  boot95 [-15.5,+3.5]  discordant +42/-54  McNemar(two-sided) p=0.2615
+vec_random-plan_s0 vs vec_swap-wrong_gt-plan_s1:  62.0% vs  76.0%  gain -14.0 pp  boot95 [-22.5,-6.0]  discordant +24/-52  McNemar(two-sided) p=0.0018
+vec_random-plan_s0 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_random-plan_s0 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_random-plan_s0 vs vec_wrong-goal_s0:  62.0% vs  71.5%  gain  -9.5 pp  boot95 [-18.0,-1.0]  discordant +29/-48  McNemar(two-sided) p=0.0395
+vec_random-plan_s0 vs vec_wrong-goal_s1:  62.0% vs  81.5%  gain -19.5 pp  boot95 [-28.0,-11.0]  discordant +21/-60  McNemar(two-sided) p=0.0000
+vec_random-plan_s0 vs vec_zero-plan_s0:  62.0% vs  71.0%  gain  -9.0 pp  boot95 [-18.0,+0.0]  discordant +34/-52  McNemar(two-sided) p=0.0662
+vec_random-plan_s0 vs vec_zero-plan_s1:  62.0% vs  76.5%  gain -14.5 pp  boot95 [-23.5,-5.5]  discordant +30/-59  McNemar(two-sided) p=0.0028
+vec_random-plan_s1 vs vec_swap-random_gt-plan_s0:  82.0% vs  69.0%  gain +13.0 pp  boot95 [+5.5,+20.5]  discordant +44/-18  McNemar(two-sided) p=0.0013
+vec_random-plan_s1 vs vec_swap-random_gt-plan_s1:  82.0% vs  82.5%  gain  -0.5 pp  boot95 [-7.5,+6.5]  discordant +26/-27  McNemar(two-sided) p=1.0000
+vec_random-plan_s1 vs vec_swap-wrong_gt-plan_s0:  82.0% vs  68.0%  gain +14.0 pp  boot95 [+5.5,+22.5]  discordant +54/-26  McNemar(two-sided) p=0.0023
+vec_random-plan_s1 vs vec_swap-wrong_gt-plan_s1:  82.0% vs  76.0%  gain  +6.0 pp  boot95 [-1.5,+13.5]  discordant +36/-24  McNemar(two-sided) p=0.1550
+vec_random-plan_s1 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_random-plan_s1 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_random-plan_s1 vs vec_wrong-goal_s0:  82.0% vs  71.5%  gain +10.5 pp  boot95 [+2.0,+19.0]  discordant +49/-28  McNemar(two-sided) p=0.0220
+vec_random-plan_s1 vs vec_wrong-goal_s1:  82.0% vs  81.5%  gain  +0.5 pp  boot95 [-7.0,+8.0]  discordant +31/-30  McNemar(two-sided) p=1.0000
+vec_random-plan_s1 vs vec_zero-plan_s0:  82.0% vs  71.0%  gain +11.0 pp  boot95 [+2.5,+19.5]  discordant +49/-27  McNemar(two-sided) p=0.0154
+vec_random-plan_s1 vs vec_zero-plan_s1:  82.0% vs  76.5%  gain  +5.5 pp  boot95 [-2.5,+13.0]  discordant +37/-26  McNemar(two-sided) p=0.2074
+vec_swap-random_gt-plan_s0 vs vec_swap-random_gt-plan_s1:  69.0% vs  82.5%  gain -13.5 pp  boot95 [-21.5,-5.0]  discordant +24/-51  McNemar(two-sided) p=0.0024
+vec_swap-random_gt-plan_s0 vs vec_swap-wrong_gt-plan_s0:  69.0% vs  68.0%  gain  +1.0 pp  boot95 [-7.5,+10.0]  discordant +40/-38  McNemar(two-sided) p=0.9099
+vec_swap-random_gt-plan_s0 vs vec_swap-wrong_gt-plan_s1:  69.0% vs  76.0%  gain  -7.0 pp  boot95 [-14.5,+0.5]  discordant +23/-37  McNemar(two-sided) p=0.0925
+vec_swap-random_gt-plan_s0 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_swap-random_gt-plan_s0 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_swap-random_gt-plan_s0 vs vec_wrong-goal_s0:  69.0% vs  71.5%  gain  -2.5 pp  boot95 [-11.0,+6.0]  discordant +33/-38  McNemar(two-sided) p=0.6353
+vec_swap-random_gt-plan_s0 vs vec_wrong-goal_s1:  69.0% vs  81.5%  gain -12.5 pp  boot95 [-20.5,-4.5]  discordant +22/-47  McNemar(two-sided) p=0.0035
+vec_swap-random_gt-plan_s0 vs vec_zero-plan_s0:  69.0% vs  71.0%  gain  -2.0 pp  boot95 [-11.0,+7.5]  discordant +42/-46  McNemar(two-sided) p=0.7493
+vec_swap-random_gt-plan_s0 vs vec_zero-plan_s1:  69.0% vs  76.5%  gain  -7.5 pp  boot95 [-16.5,+1.5]  discordant +36/-51  McNemar(two-sided) p=0.1329
+vec_swap-random_gt-plan_s1 vs vec_swap-wrong_gt-plan_s0:  82.5% vs  68.0%  gain +14.5 pp  boot95 [+6.5,+22.5]  discordant +49/-20  McNemar(two-sided) p=0.0006
+vec_swap-random_gt-plan_s1 vs vec_swap-wrong_gt-plan_s1:  82.5% vs  76.0%  gain  +6.5 pp  boot95 [-1.5,+14.5]  discordant +40/-27  McNemar(two-sided) p=0.1421
+vec_swap-random_gt-plan_s1 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_swap-random_gt-plan_s1 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_swap-random_gt-plan_s1 vs vec_wrong-goal_s0:  82.5% vs  71.5%  gain +11.0 pp  boot95 [+2.5,+19.5]  discordant +48/-26  McNemar(two-sided) p=0.0141
+vec_swap-random_gt-plan_s1 vs vec_wrong-goal_s1:  82.5% vs  81.5%  gain  +1.0 pp  boot95 [-6.5,+8.5]  discordant +30/-28  McNemar(two-sided) p=0.8957
+vec_swap-random_gt-plan_s1 vs vec_zero-plan_s0:  82.5% vs  71.0%  gain +11.5 pp  boot95 [+3.0,+19.5]  discordant +49/-26  McNemar(two-sided) p=0.0106
+vec_swap-random_gt-plan_s1 vs vec_zero-plan_s1:  82.5% vs  76.5%  gain  +6.0 pp  boot95 [-2.0,+13.5]  discordant +37/-25  McNemar(two-sided) p=0.1619
+vec_swap-wrong_gt-plan_s0 vs vec_swap-wrong_gt-plan_s1:  68.0% vs  76.0%  gain  -8.0 pp  boot95 [-16.5,+0.5]  discordant +30/-46  McNemar(two-sided) p=0.0846
+vec_swap-wrong_gt-plan_s0 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_swap-wrong_gt-plan_s0 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_swap-wrong_gt-plan_s0 vs vec_wrong-goal_s0:  68.0% vs  71.5%  gain  -3.5 pp  boot95 [-12.5,+5.5]  discordant +39/-46  McNemar(two-sided) p=0.5154
+vec_swap-wrong_gt-plan_s0 vs vec_wrong-goal_s1:  68.0% vs  81.5%  gain -13.5 pp  boot95 [-22.0,-5.0]  discordant +26/-53  McNemar(two-sided) p=0.0032
+vec_swap-wrong_gt-plan_s0 vs vec_zero-plan_s0:  68.0% vs  71.0%  gain  -3.0 pp  boot95 [-12.0,+6.0]  discordant +38/-44  McNemar(two-sided) p=0.5811
+vec_swap-wrong_gt-plan_s0 vs vec_zero-plan_s1:  68.0% vs  76.5%  gain  -8.5 pp  boot95 [-17.5,+0.5]  discordant +34/-51  McNemar(two-sided) p=0.0821
+vec_swap-wrong_gt-plan_s1 vs vec_teacher_gt-plan_s0: length mismatch 200 vs 50, skip
+vec_swap-wrong_gt-plan_s1 vs vec_teacher_gt-plan_s1: length mismatch 200 vs 50, skip
+vec_swap-wrong_gt-plan_s1 vs vec_wrong-goal_s0:  76.0% vs  71.5%  gain  +4.5 pp  boot95 [-3.5,+12.5]  discordant +38/-29  McNemar(two-sided) p=0.3284
+vec_swap-wrong_gt-plan_s1 vs vec_wrong-goal_s1:  76.0% vs  81.5%  gain  -5.5 pp  boot95 [-13.5,+3.0]  discordant +29/-40  McNemar(two-sided) p=0.2284
+vec_swap-wrong_gt-plan_s1 vs vec_zero-plan_s0:  76.0% vs  71.0%  gain  +5.0 pp  boot95 [-3.5,+13.5]  discordant +43/-33  McNemar(two-sided) p=0.3019
+vec_swap-wrong_gt-plan_s1 vs vec_zero-plan_s1:  76.0% vs  76.5%  gain  -0.5 pp  boot95 [-9.0,+8.0]  discordant +37/-38  McNemar(two-sided) p=1.0000
+vec_teacher_gt-plan_s0 vs vec_teacher_gt-plan_s1: 100.0% vs 100.0%  gain  +0.0 pp  boot95 [+0.0,+0.0]  discordant +0/-0  McNemar(two-sided) p=1.0000
+vec_teacher_gt-plan_s0 vs vec_wrong-goal_s0: length mismatch 50 vs 200, skip
+vec_teacher_gt-plan_s0 vs vec_wrong-goal_s1: length mismatch 50 vs 200, skip
+vec_teacher_gt-plan_s0 vs vec_zero-plan_s0: length mismatch 50 vs 200, skip
+vec_teacher_gt-plan_s0 vs vec_zero-plan_s1: length mismatch 50 vs 200, skip
+vec_teacher_gt-plan_s1 vs vec_wrong-goal_s0: length mismatch 50 vs 200, skip
+vec_teacher_gt-plan_s1 vs vec_wrong-goal_s1: length mismatch 50 vs 200, skip
+vec_teacher_gt-plan_s1 vs vec_zero-plan_s0: length mismatch 50 vs 200, skip
+vec_teacher_gt-plan_s1 vs vec_zero-plan_s1: length mismatch 50 vs 200, skip
+vec_wrong-goal_s0 vs vec_wrong-goal_s1:  71.5% vs  81.5%  gain -10.0 pp  boot95 [-18.0,-2.0]  discordant +26/-46  McNemar(two-sided) p=0.0245
+vec_wrong-goal_s0 vs vec_zero-plan_s0:  71.5% vs  71.0%  gain  +0.5 pp  boot95 [-8.5,+9.5]  discordant +41/-40  McNemar(two-sided) p=1.0000
+vec_wrong-goal_s0 vs vec_zero-plan_s1:  71.5% vs  76.5%  gain  -5.0 pp  boot95 [-13.5,+3.5]  discordant +34/-44  McNemar(two-sided) p=0.3082
+vec_wrong-goal_s1 vs vec_zero-plan_s0:  81.5% vs  71.0%  gain +10.5 pp  boot95 [+2.5,+18.5]  discordant +44/-23  McNemar(two-sided) p=0.0139
+vec_wrong-goal_s1 vs vec_zero-plan_s1:  81.5% vs  76.5%  gain  +5.0 pp  boot95 [-3.0,+13.0]  discordant +39/-29  McNemar(two-sided) p=0.2750
+vec_zero-plan_s0 vs vec_zero-plan_s1:  71.0% vs  76.5%  gain  -5.5 pp  boot95 [-14.5,+3.5]  discordant +36/-47  McNemar(two-sided) p=0.2723
+
+Holm-adjusted:
+  p=0.0630 -> p_holm=1.0000
+  p=0.0000 -> p_holm=0.0014
+  p=0.0000 -> p_holm=0.0006
+  p=0.0846 -> p_holm=1.0000
+  p=0.0116 -> p_holm=0.7213
+  p=0.9088 -> p_holm=1.0000
+  p=0.0041 -> p_holm=0.2724
+  p=0.7493 -> p_holm=1.0000
+  p=0.1753 -> p_holm=1.0000
+  p=0.8151 -> p_holm=1.0000
+  p=0.0117 -> p_holm=0.7213
+  p=0.9076 -> p_holm=1.0000
+  p=0.1821 -> p_holm=1.0000
+  p=0.0365 -> p_holm=1.0000
+  p=0.0198 -> p_holm=1.0000
+  p=0.0003 -> p_holm=0.0208
+  p=0.5446 -> p_holm=1.0000
+  p=0.0286 -> p_holm=1.0000
+  p=0.4426 -> p_holm=1.0000
+  p=0.0128 -> p_holm=0.7665
+  p=0.5560 -> p_holm=1.0000
+  p=0.0912 -> p_holm=1.0000
+  p=0.5966 -> p_holm=1.0000
+  p=0.0764 -> p_holm=1.0000
+  p=0.6400 -> p_holm=1.0000
+  p=0.8776 -> p_holm=1.0000
+  p=0.0000 -> p_holm=0.0000
+  p=0.2026 -> p_holm=1.0000
+  p=0.0000 -> p_holm=0.0021
+  p=0.2110 -> p_holm=1.0000
+  p=0.0000 -> p_holm=0.0010
+  p=0.0081 -> p_holm=0.5295
+  p=0.0003 -> p_holm=0.0233
+  p=0.1608 -> p_holm=1.0000
+  p=0.0001 -> p_holm=0.0103
+  p=0.0111 -> p_holm=0.7019
+  p=0.0000 -> p_holm=0.0000
+  p=0.1337 -> p_holm=1.0000
+  p=0.0000 -> p_holm=0.0003
+  p=0.1524 -> p_holm=1.0000
+  p=0.0000 -> p_holm=0.0003
+  p=0.0027 -> p_holm=0.1896
+  p=0.0000 -> p_holm=0.0011
+  p=0.1048 -> p_holm=1.0000
+  p=0.0001 -> p_holm=0.0047
+  p=0.0076 -> p_holm=0.5030
+  p=0.0000 -> p_holm=0.0019
+  p=0.1302 -> p_holm=1.0000
+  p=0.0000 -> p_holm=0.0004
+  p=0.2615 -> p_holm=1.0000
+  p=0.0018 -> p_holm=0.1304
+  p=0.0395 -> p_holm=1.0000
+  p=0.0000 -> p_holm=0.0014
+  p=0.0662 -> p_holm=1.0000
+  p=0.0028 -> p_holm=0.1950
+  p=0.0013 -> p_holm=0.0974
+  p=1.0000 -> p_holm=1.0000
+  p=0.0023 -> p_holm=0.1697
+  p=0.1550 -> p_holm=1.0000
+  p=0.0220 -> p_holm=1.0000
+  p=1.0000 -> p_holm=1.0000
+  p=0.0154 -> p_holm=0.8801
+  p=0.2074 -> p_holm=1.0000
+  p=0.0024 -> p_holm=0.1760
+  p=0.9099 -> p_holm=1.0000
+  p=0.0925 -> p_holm=1.0000
+  p=0.6353 -> p_holm=1.0000
+  p=0.0035 -> p_holm=0.2410
+  p=0.7493 -> p_holm=1.0000
+  p=0.1329 -> p_holm=1.0000
+  p=0.0006 -> p_holm=0.0483
+  p=0.1421 -> p_holm=1.0000
+  p=0.0141 -> p_holm=0.8221
+  p=0.8957 -> p_holm=1.0000
+  p=0.0106 -> p_holm=0.6773
+  p=0.1619 -> p_holm=1.0000
+  p=0.0846 -> p_holm=1.0000
+  p=0.5154 -> p_holm=1.0000
+  p=0.0032 -> p_holm=0.2196
+  p=0.5811 -> p_holm=1.0000
+  p=0.0821 -> p_holm=1.0000
+  p=0.3284 -> p_holm=1.0000
+  p=0.2284 -> p_holm=1.0000
+  p=0.3019 -> p_holm=1.0000
+  p=1.0000 -> p_holm=1.0000
+  p=1.0000 -> p_holm=1.0000
+  p=0.0245 -> p_holm=1.0000
+  p=1.0000 -> p_holm=1.0000
+  p=0.3082 -> p_holm=1.0000
+  p=0.0139 -> p_holm=0.8221
+  p=0.2750 -> p_holm=1.0000
+  p=0.2723 -> p_holm=1.0000

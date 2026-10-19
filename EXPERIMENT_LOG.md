@@ -806,3 +806,81 @@ E1（NCA vs Euclid，参数/预算匹配）。E0 不通则先修通道，不读 
 解释矩阵见 `REPORT_E0_E1_PROTOCOL.md`。核心约束：移除 field-routed 固定执行器（场只
 进入一次）；所有臂共用 GT-field teacher 的动作标签；E0 通过标准为 GT 比 zero 高 ≥10 pp
 且场交换显著降低成功率；E1 主对比 NCA vs Euclid。
+
+---
+
+## E0 — 场注入通道有效性闭环实验（2026-10-19/20）— 诚实负面
+
+完整报告：`reports/E0.md`。本节省流水账，只留关键设计、数字与判定。
+
+### 设计与实现
+
+- **数据**：600 个两墙三物体场景，GT-field teacher 生成 25,004 chunks / 4,806 visits；
+  所有臂共用同一批动作标签，只改条件下发的场（gt / zero / random / wrong-goal /
+  no-field）。5 arms × 2 seeds × 15K steps，固定步数、无 MSE 选模。
+- **架构**：SmolVLA-0.5B，VLM 冻结（expert-only），visit 级高层策略预测
+  `[gx,gy,gz,open]`；低层 expert 条件 = 图像 + 11 维 state + 语言 + 64 个场 token。
+  场 4 通道 64×64 `[obstacle, plan, dx/G, dy/G]`，4→32→64→128 stride-2 CNN →
+  Linear(128→960)，插入 prefix，`pad_mask=1/att_mask=0`；encoder 217.8K。
+- **评估**：batch-16 lockstep 向量化闭环，200 个配对场景（scene seed 777），exec 4
+  （=训练 stride），max 1500 steps，visit cap 180；per-scene plant RNG 跨臂共享。
+- **评估器修正**（这些修正改变过结论，必须记录）：①批量 `predict_action_chunk`
+  被截断到首个 chunk；②向量化 lift 插值与顺序版不一致；③顺序评估器复用陈旧 state；
+  ④arm→field 映射错位。修正后顺序/批量在无噪声下可对齐，批量与顺序因流噪声组合不同
+  不逐位相同，但场景配对精确。曾提出的 “stride 2” 修正被撤回（训练 stride 为 4）。
+- **确定性噪声敏感性**：新增 `--det-noise`，流匹配噪声按 `(scene_id, query_i)` 生成，
+  两臂在相同决策点看到相同噪声；重复运行逐位一致。
+
+### 主矩阵（full success，200 场景）
+
+| 臂 | s0 | s1 |
+|---|---|---|
+| gt-plan | 70.0% | 79.0% |
+| zero-plan | 71.0% | 76.5% |
+| random-plan | 62.0% | 82.0% |
+| wrong-goal | 71.5% | 81.5% |
+| **no-field** | **87.0%** | **88.0%** |
+
+- 主对比 gt−zero：s0 **−1.0 pp**（配对 +36/−38，单侧 McNemar p=.6362）；
+  s1 **+2.5 pp**（+39/−34，p=.3200）；合并 **+0.8 pp**（95% CI [−5.0,+6.2]，
+  +75/−72，p=.4345）。
+- no-field−zero：+16.0 pp（s0，p=.0001）、+11.5 pp（s1，p=.0076）；合并 +13.8 pp
+  （[+8.2,+19.2]，+96/−41，p<.0001）。s0 Holm 校正后 no-field 仍显著高于全部场臂。
+- 确定性噪声复核：gt 74.0/77.5，zero 80.0/81.0，random 62.5/82.0；合并 gt−zero
+  **−4.8 pp**（[−10.5,+1.0]，+58/−77，单侧 p=.9576，方向为负）。
+- 失效形态：所有失败都跑满 1500 步；成功平均 734–797 步（det 下 GT 成功比 zero 慢
+  约 50 步）。跨 seed 场景级 phi≈0（gt −.096、zero −.068、random −.045），
+  最优臂 seed 间差可达 20 pp。
+
+### 场交换与 teacher 诊断
+
+- 推理时把 GT 场换成 random/wrong（首 chunk 动作 L2 dev 0.36–0.40，说明场被读取），
+  成功率与同臂 GT 场相比（跌幅 = own − swapped）：s0 69.0%（+1.0 pp）、
+  68.0%（+2.0 pp）；s1 82.5%（−3.5 pp）、76.0%（+3.0 pp）。
+  **四组跌幅 −3.5~+3.0 pp，全部 <5 pp**，交换门禁失败——场内容可被任意替代。
+- teacher 子目标（同一 50 场景）：gt-plan 预测子目标 s0 74.0%（999 步）、
+  s1 86.0%（849 步）→ oracle 子目标 **100%（50/50）**，213/212 步。
+  → 高层子目标序列是主瓶颈。
+- OOD（40 个随机墙场景，描述性）：s0 gt 60.0%（24/40）、zero 75.0%（30/40）、
+  random 85.0%（34/40）；s1 gt 85.0%（34/40）、zero 77.5%（31/40）、
+  random 90.0%（36/40）。两 seed gt−zero 方向相反，n=40 功效低，只作描述。
+
+### 判定
+
+**E0 不通过**（主对比 <10 pp 且不显著；random 门禁基本满足；交换门禁失败），
+**E1 暂缓**。归因两条：(1) 64-token prefix 注入实现本身有损（no-field 高 9–17 pp）；
+(2) 高层子目标主导长程成败。离线门禁全部通过（encoder 梯度 0.55–0.75、overfit
+replay、场→动作探针 0.37 cm / cos 0.978），排除“未训练/坐标错位”。
+
+**下一步**：P0 修注入（等参数 no-field 控制、FiLM/adaLN、KV adapter、token 数与位置、
+必要时解冻 VLM 末层），验收线“场臂 ≥ no-field”；P1 修高层；P2 默认 `--det-noise`
+后再补 seed/启动 E1。
+
+### 产物
+
+- 代码：`scripts/train_field_expert.py`、`scripts/eval_field_expert{,_vec}.py`、
+  `scripts/field_common.py`、`scripts/multi_lowlevel_data.py`、`scripts/analyze_e0.py`、
+  `scripts/plot_e0.py`、`soma/field_policy.py`。
+- 结果：`logs/e0/*.json`（每 run 的逐场景 success/placed/bumps/steps/dev）；
+  归档副本 `assets/e0/results/`；图 `assets/e0/{arms,diagnostics}.png`。
+- 复现命令见 `reports/E0.md` 附录。

@@ -1,4 +1,4 @@
-# SomaVLA — 实验总结（按版本 / Round，至 2026-10-19）
+# SomaVLA — 实验总结（按版本 / Round，至 2026-10-20）
 
 > 本文件把 SomaVLA 从 Round 12 至今的每一次架构调整与对应验证按版本组织成一条
 > 可追溯的演进链。每个 Round 固定给：**目标 → 架构状态 → 本次架构调整 → 验证
@@ -25,6 +25,7 @@
 | R8 · Track A | 09-02/03 | SmolVLA-0.5B 对照（不新增架构） | 同 harness 闭环 | **诚实负面**（Q1/Q2） |
 | R9 · Form | 10-13 | **改 NCA 形态**：细胞 语义 DOF → 同质空间单元（空间规划场） | Tier 1 泛化轴；容量扫描；多目标；调和势场；time-to-contact 场 | **3/4 探针 NCA 胜**：Tier 1 ρ .95–1.00 vs ≤.56；容量 ~16K 过拐点（CNN 162K 仍 G64 ρ=.63）；多目标 k=1–8 全 ρ=1.00；调和势全胜；**time-to-contact 反向**（CNN 胜——局部多源场） |
 | R10 · Method 2 | 10-18 | 不改架构：评估把空间规划场作为条件注入 SmolVLA flow-matching expert | 成本/可行性评估（文档） | **方案定稿，待 E0** |
+| R11 · E0 | 10-19/20 | 落地 R10：GT 规划场 token 注入 SmolVLA expert；5 arms × 2 seeds × 200 配对场景预注册闭环 | 主对比、场交换、teacher 诊断、OOD | **诚实负面**：主对比 +0.8 pp（p=.43）；no-field 高 13.8 pp；teacher 100% → 注入有损 + 高层瓶颈，E1 暂缓 |
 
 架构演进速览（组件增减）：
 
@@ -126,6 +127,47 @@ cross_attn / expert-only`，prefix KV 每 chunk 填一次、10 步去噪复用�
 
 完整报告：`REPORT_FIELD_INJECTION.md`；E0/E1 完整实验方案：
 `REPORT_E0_E1_PROTOCOL.md`（2026-10-19）。
+
+---
+
+## R11 · E0（2026-10-19/20）— 场注入通道有效性：预注册实验 = 诚实负面
+
+**目标**：在闭环中检验 R10 方案的首个可证伪问题——把 64×64 GT 空间规划场经小 CNN
+编成 token 注入 SmolVLA flow-matching expert，是否带来**可归因**的成功率增益。
+预注册主对比 `gt-plan` vs `zero-plan`（同 encoder、同参数量、只换场内容）；
+通过 = 增益 ≥10 pp 且单侧配对 McNemar p<0.05，并要求 `random-plan − zero-plan` <5 pp、
+推理时场交换成功率跌幅 ≥5 pp。
+
+**架构状态**：SmolVLA-0.5B（VLM 冻结，expert-only 训练）+ visit 级高层策略（预测
+`[gx,gy,gz,open]` 子目标）+ 场条件低层 expert。场 4 通道 `[obstacle, plan, dx/G, dy/G]`，
+64×64；4→32→64→128 stride-2 CNN → 8×8=64 token → Linear 960 插入 prefix
+（encoder 217.8K）；动作 = 绝对 plant target，chunk 8 / exec 4。
+
+**本次实验**：600 场景 / 25,004 chunks / 4,806 visits；5 arms（gt / zero / random /
+wrong-goal / no-field）× 2 seeds × 15K steps；闭环 200 配对场景（batch-16 lockstep，
+per-scene plant RNG 跨臂共享，scene seed 777），加确定性 flow-noise 敏感性分析、
+推理时场交换、teacher 子目标诊断（同一 50 场景）、随机墙 OOD。
+
+**结果**：
+- **主对比 null**：gt−zero = −1.0 pp（s0，p=.6362）、+2.5 pp（s1，p=.3200），
+  合并 **+0.8 pp**（95% CI [−5.0,+6.2]，p=.4345）。确定性噪声复核为 **−4.8 pp**
+  （方向为负）。random / wrong-goal 与 zero 均无显著差异；四组场交换跌幅
+  −3.5 ~ +3.0 pp（全部 <5 pp）。→ 四条预注册判据只勉强满足 random 一条。
+- **注入实现有害**：`no-field` 在 s0/s1 达 **87%/88%**，高于所有场臂的 62–82%；
+  对 zero 的合并差 **+13.8 pp**（[+8.2,+19.2]，p<.0001）。两 seed 方向一致。
+- **高层是主要瓶颈**：同一 50 场景把预测子目标换成 oracle 后，gt-plan 从
+  s0 74.0%（999 步）、s1 86.0%（849 步）升到 **100%（50/50，213/212 步）**。
+- **离线通道检查全部通过**（encoder 梯度 0.55–0.75、overfit replay、场→动作探针
+  0.37 cm / cos 0.978），排除“encoder 没训”“坐标错位”“场离线不可预测”。
+- OOD（40 随机墙场景，描述性）：s0 gt 60.0%、zero 75.0%、random 85.0%；
+  s1 gt 85.0%、zero 77.5%、random 90.0%。两 seed 的 gt−zero 方向相反（−15.0 / +7.5 pp）。
+
+**结论**：**E0 不通过，E1（NCA vs Euclid 归因）暂缓**。当前数据支持两条归因：
+(a) 64-token prefix 注入 / 位置偏移 / 注意力稀释使策略相对 no-field 退化 9–17 pp；
+(b) 高层子目标序列决定长程成败，低层场差异被淹没。因此 E0 的 null **不能**解读为
+“NCA/场对低层无用”。下一步 P0 修注入（等参数 no-field 控制、FiLM/adaLN/KV adapter、
+token 数量/位置、必要时解冻 VLM 末层），验收线为**场臂 ≥ no-field**；P1 修高层；
+P2 再启用确定性噪声做正式评估。完整报告：`reports/E0.md`。
 
 ---
 
