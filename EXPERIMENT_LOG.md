@@ -801,3 +801,8 @@ MLP greedy 34/40 escape 37/40；NCA 23/40, 29/40；CNN-short 19/22；CNN-long 12
 
 **下一步**：E0 用 GT field token 验证注入通道上限（+ zero/random 对照），通过后再做
 E1（NCA vs Euclid，参数/预算匹配）。E0 不通则先修通道，不读 NCA 结论。
+
+**E0/E1 完整实验方案（2026-10-19）**：数据、动作标签、注入、训练、评估、预注册判据与
+解释矩阵见 `REPORT_E0_E1_PROTOCOL.md`。核心约束：移除 field-routed 固定执行器（场只
+进入一次）；所有臂共用 GT-field teacher 的动作标签；E0 通过标准为 GT 比 zero 高 ≥10 pp
+且场交换显著降低成功率；E1 主对比 NCA vs Euclid。

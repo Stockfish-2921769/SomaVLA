@@ -1,4 +1,4 @@
-# SomaVLA — 实验总结（按版本 / Round，至 2026-10-18）
+# SomaVLA — 实验总结（按版本 / Round，至 2026-10-19）
 
 > 本文件把 SomaVLA 从 Round 12 至今的每一次架构调整与对应验证按版本组织成一条
 > 可追溯的演进链。每个 Round 固定给：**目标 → 架构状态 → 本次架构调整 → 验证
@@ -111,10 +111,11 @@ Transformer 反超（.45/.014 vs .39/.082）；该目标梯度浅、prog 无区�
 若要让"NCA 规划"真正进入 VLA 架构，需要把场作为条件信号保留 action expert（方法 2），
 而不是替换执行器。
 
-**方案**：保留 SmolVLA action expert 与低层执行器；64×64 规划场经小 CNN 编成 64 个 token
-注入 prefix（或 FiLM 调制 expert）。流匹配的 ODE 不变——场只作为 denoiser 的额外 context。
-SmolVLA 默认 `chunk=50 / n_action_steps=50 / num_steps=10 / cross_attn / expert-only`；
-prefix KV 每 chunk 填一次、10 步去噪复用，增量算力很小。
+**方案**：保留 SmolVLA action expert 作为低层策略，移除方法 1 的 field-routed 固定执行器
+（场只进入一次）；64×64 规划场经小 CNN 编成 64 个 token 注入 prefix（或 FiLM 调制
+expert）。流匹配的 ODE 不变——场只作为 denoiser 的额外 context。SmolVLA 基座默认
+`chunk=50`；本任务 config 变异为 `chunk=8 / n_action_steps=4 / num_steps=10 /
+cross_attn / expert-only`，prefix KV 每 chunk 填一次、10 步去噪复用，增量算力很小。
 
 **成本/可行性**（2×4090 口径）：SmolVLA 3–5 天（NCA 推理毫秒级、场编码器 0.1–0.3M、
 单卡 expert-only 训练）；π0/π0.5 1–2 周；GR00T N1.x 2–3 周；OpenVLA 自回归离散动作，
@@ -123,7 +124,8 @@ prefix KV 每 chunk 填一次、10 步去噪复用，增量算力很小。
 **纪律**：同一编码器下 GT / NCA / Euclid / random / zero 场对照 + field dropout + 推理时
 场交换。没有 Euclid 对照，方法 2 会重演方法 1 的归因问题。
 
-完整报告：`REPORT_FIELD_INJECTION.md`。
+完整报告：`REPORT_FIELD_INJECTION.md`；E0/E1 完整实验方案：
+`REPORT_E0_E1_PROTOCOL.md`（2026-10-19）。
 
 ---
 

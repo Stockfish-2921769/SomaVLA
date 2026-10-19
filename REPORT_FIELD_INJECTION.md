@@ -3,6 +3,7 @@
 > 日期：2026-10-18
 > 状态：方案评估（尚未做注入实验）
 > 关联：`EXPERIMENT_LOG.md` 轴 F（规划场闭环归因审计）、`EXPERIMENT_SUMMARY.md` R10
+> E0/E1 完整实验方案：`REPORT_E0_E1_PROTOCOL.md`（2026-10-19）
 >
 > **结论先行**：可行，且是低侵入改动。flow matching 的条件接口本来就是开放的——规划场
 > 作为 denoiser 的额外 context（prefix token / KV / FiLM）进入，不需要改 ODE 求解器。
