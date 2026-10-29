@@ -26,33 +26,34 @@ from multi_task import (sample_scene, render_scene, MultiEnv, N_OBJ,
 from spatial_plan_data import geodesic_field
 from soma.vla_lite.high_level import HighLevelPolicy
 from soma.vla_lite.language import LanguageSlot
-from soma.vla_lite.policy import VLALiteLowLevel
+from soma.vla_lite.policy import FIELD_OVERRIDES, VLALiteLowLevel
 from soma.vla_lite.vision import FrozenSigLIP
+from vla_lite_ood import sample_scene_multi_wall
 
-G_VLA = 32
-
-
-def xy_to_cell32(xy):
-    j = int((xy[0] - XL) / (XH - XL) * G_VLA)
-    i = int((YH - xy[1]) / (YH - YL) * G_VLA)
-    return (min(max(i, 0), G_VLA - 1), min(max(j, 0), G_VLA - 1))
+G_OBS = 64                   # obstacle_grid native resolution
 
 
-def gt_field_32(env, goal_xy):
-    """32x32 obstacle + solvable plan, same construction as vla_lite_data."""
+def xy_to_cell_g(xy, g):
+    j = int((xy[0] - XL) / (XH - XL) * g)
+    i = int((YH - xy[1]) / (YH - YL) * g)
+    return (min(max(i, 0), g - 1), min(max(j, 0), g - 1))
+
+
+def gt_field_g(env, goal_xy, g):
+    """GxG obstacle + solvable plan (G in {32, 64}), same construction as
+    vla_lite_data at G=32; plan is d/(2G) so G32/G64 share a value range."""
     obs64 = obstacle_grid(env.objs, goal_xy, env.walls, env.placed, env.active)
     # clear the goal cell at 64 before max-pooling, as the stored fields do
-    gj = int((goal_xy[0] - XL) / (XH - XL) * 64)
-    gi = int((YH - goal_xy[1]) / (YH - YL) * 64)
-    obs64[min(max(gi, 0), 63), min(max(gj, 0), 63)] = False
-    obs32 = obs64.reshape(G_VLA, 2, G_VLA, 2).max(axis=(1, 3))
-    gc = xy_to_cell32(goal_xy)
-    obs32[gc] = False
-    dist, reach = geodesic_field(obs32, gc)
-    plan = np.where(np.isfinite(dist), dist / (2.0 * G_VLA), 1.0)
+    obs64[xy_to_cell_g(goal_xy, G_OBS)] = False
+    f = G_OBS // g
+    obs = obs64.reshape(g, f, g, f).max(axis=(1, 3))
+    gc = xy_to_cell_g(goal_xy, g)
+    obs[gc] = False
+    dist, reach = geodesic_field(obs, gc)
+    plan = np.where(np.isfinite(dist), dist / (2.0 * g), 1.0)
     plan = plan.astype(np.float32)
-    plan[obs32] = 0.0
-    return plan, obs32.astype(np.float32)
+    plan[obs] = 0.0
+    return plan, obs.astype(np.float32)
 
 
 class Ep:
@@ -151,7 +152,8 @@ def det_noise_for(eps, chunk, action_dim, device):
 
 @torch.no_grad()
 def predict_chunks(pol, vision, eps, scenes, act_mean, act_std,
-                   det_noise=True, diag=True):
+                   det_noise=True, diag=True, grid=32, k_steps=None,
+                   field_override=None):
     imgs = np.stack([render_scene(e.env.objs, scenes[e.scene_id][1],
                                   scenes[e.scene_id][2], e.env.placed,
                                   scenes[e.scene_id][3], e.state)
@@ -163,25 +165,27 @@ def predict_chunks(pol, vision, eps, scenes, act_mean, act_std,
     st = torch.from_numpy(np.stack([e.state for e in eps])).float().to(dev)
     sg = torch.from_numpy(np.stack([e.cmd for e in eps])).float().to(dev)
 
-    want_gt = pol.field_source == "gt" or (
-        diag and pol.field_source in {"nca", "cnn"})
+    has_plan = pol.field_source in {"nca", "cnn", "zero"}
+    want_gt = pol.field_source == "gt" or field_override == "plan-gt" or (
+        diag and has_plan)
     gt_plan = gt_obs = None
     if want_gt:
-        fields = [gt_field_32(e.env, e.cmd[:2]) for e in eps]
+        fields = [gt_field_g(e.env, e.cmd[:2], grid) for e in eps]
         gt_plan = torch.from_numpy(np.stack([f[0] for f in fields])).to(dev)
         gt_obs = torch.from_numpy(np.stack([f[1] for f in fields])).to(dev)
 
     kw = {}
-    if pol.field_source == "gt":
+    if pol.field_source == "gt" or field_override == "plan-gt":
         kw = dict(gt_plan=gt_plan, gt_obstacle=gt_obs)
     noise = None
     if det_noise:
         noise = det_noise_for(eps, pol.decoder.chunk, pol.decoder.action_dim,
                               dev)
     out = pol(vis_tokens=tok, states=st, subgoals=sg, sample_steps=10,
-              noise=noise, **kw)
+              noise=noise, grid=grid, k_steps=k_steps,
+              field_override=field_override, **kw)
 
-    if want_gt and pol.field_source in {"nca", "cnn"}:
+    if want_gt and has_plan:
         pred_plan = out["plan"].float().cpu().numpy()
         p_obs = torch.sigmoid(out["obstacle_logits"][:, 0]).cpu().numpy()
         gp = gt_plan.cpu().numpy()
@@ -209,8 +213,23 @@ def main():
                     help="trained high-level ckpt; empty = teacher subgoal")
     ap.add_argument("--n-episodes", type=int, default=200)
     ap.add_argument("--seed", type=int, default=777)
-    ap.add_argument("--scene-type", choices=["two-walls", "random"],
-                    default="two-walls")
+    ap.add_argument("--scene-type",
+                    choices=["two-walls", "random", "multi-wall"],
+                    default="two-walls",
+                    help="multi-wall = O2 OOD: two-wall base + extra "
+                         "segments (--n-extra-walls)")
+    ap.add_argument("--n-extra-walls", type=int, nargs=2, default=[2, 6],
+                    metavar=("LO", "HI"))
+    ap.add_argument("--grid", type=int, default=0,
+                    help="eval grid (O1: 64); 0 = training grid")
+    ap.add_argument("--k-steps", type=int, default=0,
+                    help="NCA inference K; 0 = ckpt K scaled by grid/train")
+    ap.add_argument("--no-k-scale", action="store_true",
+                    help="keep ckpt K when --grid differs from training")
+    ap.add_argument("--field-override", choices=FIELD_OVERRIDES,
+                    default=None,
+                    help="inference probe: zero = hide field; plan-* = "
+                         "replace only the plan channel")
     ap.add_argument("--max-steps", type=int, default=1500)
     ap.add_argument("--visit-cap", type=int, default=180)
     ap.add_argument("--exec-steps", type=int, default=STRIDE)
@@ -229,13 +248,24 @@ def main():
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     ca = ck["args"]
     arm = ca.get("arm", "nca")
-    pol = VLALiteLowLevel(field_source=arm, grid=ca.get("grid", 32),
-                          chunk=8, action_dim=7)
+    train_grid = ca.get("grid", 32)
+    grid = args.grid or train_grid
+    readout = ca.get("readout", "full")
+    pol = VLALiteLowLevel(field_source=arm, grid=grid, chunk=8, action_dim=7,
+                          readout_mode=readout,
+                          cnn_layers=ca.get("cnn_layers", 12))
     norm = ck["norm"]
     pol.set_norm(norm["st_mean"], norm["st_std"],
                  norm["ch_mean"], norm["ch_std"])
-    if ca.get("k_steps"):
-        pol.nca.k_steps = ca["k_steps"]
+    # pre-random-K ckpts only stored k_steps (0 = NCA default 12)
+    k_train = ca.get("k_infer") or ca.get("k_steps") or pol.nca.k_steps
+    if args.k_steps:
+        k_eval = args.k_steps
+    elif args.no_k_scale:
+        k_eval = k_train
+    else:                    # same physical propagation range at any G
+        k_eval = int(round(k_train * grid / train_grid))
+    pol.nca.k_steps = k_eval
     pol.load_state_dict(ck["model"])
     pol.eval().to(device)
     vision = FrozenSigLIP(device=device).to(device).eval()
@@ -263,12 +293,19 @@ def main():
                                    dtype=torch.float32, device=device)
 
     rng = np.random.RandomState(args.seed)
-    scenes = [sample_scene(rng, two_walls=(args.scene_type == "two-walls"))
-              for _ in range(args.n_episodes)]
+    if args.scene_type == "multi-wall":
+        scenes = [sample_scene_multi_wall(rng, tuple(args.n_extra_walls))
+                  for _ in range(args.n_episodes)]
+    else:
+        scenes = [sample_scene(rng,
+                               two_walls=(args.scene_type == "two-walls"))
+                  for _ in range(args.n_episodes)]
     ep_rngs = [np.random.RandomState(args.seed * 7919 + i)
                for i in range(args.n_episodes)]
     print(f"vla-lite eval: {args.n_episodes} eps, batch {args.batch_episodes},"
-          f" arm {arm}, exec {args.exec_steps}, "
+          f" arm {arm}, readout {readout}, grid {grid} (train {train_grid}),"
+          f" K {k_eval}, override {args.field_override}, "
+          f"scenes {args.scene_type}, exec {args.exec_steps}, "
           f"{'stochastic' if args.stochastic_noise else 'det'}-noise, "
           f"ckpt {args.ckpt}, high "
           f"{'teacher' if hl is None else args.high_ckpt}", flush=True)
@@ -328,7 +365,8 @@ def main():
         if lo:
             chunks = predict_chunks(
                 pol, vision, lo, scenes, act_mean, act_std,
-                det_noise=not args.stochastic_noise, diag=not args.no_diag)
+                det_noise=not args.stochastic_noise, diag=not args.no_diag,
+                grid=grid, field_override=args.field_override)
             for e, c in zip(lo, chunks):
                 e.chunk = c
                 e.chunk_i = 0
@@ -384,6 +422,8 @@ def main():
     summary = [
         f"\n── VLA-lite closed loop ({n} eps, seed {args.seed}, arm {arm}) ──",
         f"  ckpt {args.ckpt}",
+        f"  scenes {args.scene_type}  grid {grid} (train {train_grid})  "
+        f"K {k_eval}  readout {readout}  override {args.field_override}",
         f"  full success {ok}/{n} ({ok / n * 100:.1f}%)   "
         f"mean placed {np.mean(placed):.2f}/{N_OBJ}",
         f"  mean bumps/ep {np.mean(bumps):.2f}  "
@@ -411,6 +451,11 @@ def main():
                 "ckpt": args.ckpt, "arm": arm,
                 "exec_steps": args.exec_steps, "seed": args.seed,
                 "scene_type": args.scene_type,
+                "n_extra_walls": (args.n_extra_walls
+                                  if args.scene_type == "multi-wall"
+                                  else None),
+                "grid": grid, "train_grid": train_grid, "k_steps": k_eval,
+                "readout": readout, "field_override": args.field_override,
                 "n": n, "success": succ, "placed": placed, "bumps": bumps,
                 "wall_hits": wh, "steps": steps,
                 "visits_total": visits_all, "visits_ok": visits_ok,

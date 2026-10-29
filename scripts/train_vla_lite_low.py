@@ -58,32 +58,51 @@ class LowLevelData(Dataset):
 
 def make_policy(args, norm):
     pol = VLALiteLowLevel(field_source=args.arm, grid=args.grid,
-                          chunk=8, action_dim=7)
+                          chunk=8, action_dim=7,
+                          readout_mode=args.readout,
+                          cnn_layers=args.cnn_layers)
     pol.set_norm(norm["st_mean"], norm["st_std"],
                  norm["ch_mean"], norm["ch_std"])
-    if args.k_steps:
-        pol.nca.k_steps = args.k_steps
+    pol.nca.k_steps = args.k_infer
     return pol
 
 
-def batch_loss(pol, batch, args):
+def resolve_k(args):
+    """Random-K training (R9 Route A): K ~ U[k_lo, k_hi] per step pushes the
+    rule toward a fixed point instead of a K-specific transient. Inference K
+    defaults to k_hi; eval scales it with grid size (K ∝ G)."""
+    if args.k_steps:                       # fixed-K ablation (e.g. K=12)
+        args.k_range = [args.k_steps, args.k_steps]
+    lo, hi = args.k_range
+    if not 1 <= lo <= hi:
+        raise ValueError(f"bad --k-range {args.k_range}")
+    args.k_infer = hi
+
+
+def batch_loss(pol, batch, args, k_steps=None):
     act_mean = torch.as_tensor(args.act_mean, device=batch["action"].device)
     act_std = torch.as_tensor(args.act_std, device=batch["action"].device)
     action_norm = (batch["action"] - act_mean) / act_std
     out = pol(vis_tokens=batch["feat"], states=batch["state"],
               subgoals=batch["subgoal"], actions_norm=action_norm,
               gt_plan=batch["plan"], gt_obstacle=batch["obstacle"],
-              field_dropout=args.field_dropout)
+              field_dropout=args.field_dropout, k_steps=k_steps)
     loss = out["loss"]
     plan_loss = torch.zeros((), device=loss.device)
-    if args.plan_weight > 0 and args.arm in {"nca", "cnn"}:
+    mask = (batch["obstacle"] < 0.5).float()
+    # zero arm trains its NCA with the same plan supervision as nca, so the
+    # only difference between them is whether the decoder sees the field
+    if args.plan_weight > 0 and args.arm in {"nca", "cnn", "zero"}:
         pred_plan = out["plan"]
         if pred_plan.ndim == 4:
             pred_plan = pred_plan[:, 0]
-        mask = (batch["obstacle"] < 0.5).float()
         plan_loss = (((pred_plan - batch["plan"]) ** 2) * mask).sum() / \
             mask.sum().clamp(min=1.0)
         loss = loss + args.plan_weight * plan_loss
+    if args.fp_weight > 0 and out["nca_delta"] is not None:
+        fp = ((out["nca_delta"] ** 2) * mask).sum() / \
+            mask.sum().clamp(min=1.0)
+        loss = loss + args.fp_weight * fp
     obs_loss = F.binary_cross_entropy_with_logits(
         out["obstacle_logits"][:, 0], batch["obstacle"])
     loss = loss + args.obs_weight * obs_loss
@@ -115,7 +134,17 @@ def main():
     ap.add_argument("--steps", type=int, default=20000)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--grid", type=int, default=32)
-    ap.add_argument("--k-steps", type=int, default=0)
+    ap.add_argument("--k-steps", type=int, default=0,
+                    help="fixed K (ablation); overrides --k-range")
+    ap.add_argument("--k-range", type=int, nargs=2, default=[16, 64],
+                    metavar=("LO", "HI"),
+                    help="random-K training range; inference K = HI")
+    ap.add_argument("--fp-weight", type=float, default=0.0,
+                    help="fixed-point residual |s_K - s_{K-1}|^2 on plan")
+    ap.add_argument("--readout", choices=["full", "plan"], default="full")
+    ap.add_argument("--cnn-layers", type=int, default=12,
+                    help="CNN depth; 12 = param/RF-matched to K=12, "
+                         ">= G = global-RF control")
     ap.add_argument("--plan-weight", type=float, default=0.1)
     ap.add_argument("--obs-weight", type=float, default=0.5)
     ap.add_argument("--field-dropout", type=float, default=0.1)
@@ -132,6 +161,7 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="ckpts/vla_lite/nca_s0")
     args = ap.parse_args()
+    resolve_k(args)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -157,8 +187,11 @@ def main():
         dict(params=pol.decoder.parameters(), lr=args.lr_decoder),
         dict(params=pol.language.parameters(), lr=args.lr_adapter),
     ]
-    if args.arm == "nca":
+    if args.arm in {"nca", "zero"}:
         groups.append(dict(params=pol.nca.parameters(), lr=args.lr_nca))
+    if args.arm == "vis":
+        groups.append(dict(params=pol.vis_field.parameters(),
+                           lr=args.lr_adapter))
     if args.arm == "cnn":
         groups.append(dict(params=pol.cnn.parameters(), lr=args.lr_nca))
     opt = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
@@ -191,9 +224,10 @@ def main():
             batch = next(it)
         batch = {k: v.to(args.device) for k, v in batch.items()}
         pol.train()
+        k = random.randint(*args.k_range)
         with torch.autocast("cuda", dtype=torch.bfloat16,
                             enabled=args.device.startswith("cuda")):
-            loss, act, plan, obs = batch_loss(pol, batch, args)
+            loss, act, plan, obs = batch_loss(pol, batch, args, k_steps=k)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(pol.parameters(), args.clip)

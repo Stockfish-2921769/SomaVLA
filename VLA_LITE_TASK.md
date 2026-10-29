@@ -335,14 +335,20 @@ for k in 1..K:
 plan = s_K[..., 0]
 ```
 
-- **K=12**（主臂）；K∈{1,4,12,24} 为消融。
-- **参数量**：约 115K；与网格尺寸无关，G32/G64 共用同一组权重。
-- **稳定性**：残差 + tanh + 最后一层零初始化，初始为恒等映射；梯度裁剪 1.0。
+- **K（2026-10-30 修订，见 §13）**：训练 random-K∈[16,64]（每步均匀采样），
+  推理 K=64（G32）；评估时 K 随网格等比缩放（G64→K=128），保证同一物理传播
+  距离。固定 K∈{1,4,12,24} 为消融（`--k-steps`）。
+- **参数量**：约 107K；与网格尺寸无关，G32/G64 共用同一组权重。
+- **稳定性**：残差 + tanh + 最后一层零初始化，初始为恒等映射；梯度裁剪 1.0；
+  可选不动点残差损失 `--fp-weight`（R9 Route A）。
 - **为什么是 3×3 conv 而不是原 SpatialNCA 的 8 邻域 MLP**：两者都是局部规则；
-  conv 更容易与 CNN 对照做参数/感受野匹配。原 `soma/spatial_nca.py` 的
+  conv 更容易与 CNN 对照做参数匹配。原 `soma/spatial_nca.py` 的
   “共享规则 + 障碍冻结 + 迭代传播”语义保留。
-- **感受野**：12 次 3×3 = 25×25 cell，与 12 层 3×3 CNN 相同；区别只在
-  **权重共享/迭代**。这是 G2 的关键控制。
+- **感受野（修订）**：原设计 K=12 把 NCA 感受野锁在 25×25、与 12 层 CNN 相同，
+  只剩“权重共享”一项差异——但 R9 证明 NCA 的优势恰恰来自**无界深度迭代到
+  不动点**（cnn_xxl 感受野 ≥G 仍 ρ=.63），K=12 在 G32 带绕行的场景上传播不完，
+  G64 更不可能。因此主臂改为深迭代；感受野/深度的公平性由 CNN 的两档对照承担
+  （12 层参数匹配 + ≥G 层全局感受野，见 §6.4）。
 - **读出**：plan 通道用于辅助监督；完整 32 通道经 1×1 conv→256 + stride-2
   conv→16×16×256，作为动作解码器的 256 个网格 token。
 
@@ -508,9 +514,10 @@ plan = s_K[..., 0]
   readout 用 stride-2 把 G×G 映射回 16×16 token（G64→32×32→16×16 需两次
   stride-2，或 adaptive pool 到 16×16）。解码器 token 数保持 256，保证只有
   “网格分辨率/传播”变化。
-- **O2 实现**：新增 `sample_scene_multi_obstacle(rng, n_obj=3, n_walls∈[4,8])`，
-  随机放置矩形墙段，保留 `_scene_reachable` 检查；其余物理/成功判据不变。
-  训练集只出现 2 道墙；O2 是零样本。
+- **O2 实现**（已实现，`scripts/vla_lite_ood.py::sample_scene_multi_wall`）：
+  两墙基底 + 2–6 段随机额外墙段（长 8–16 cm），保留起点净空与
+  `_scene_reachable` 检查；其余物理/成功判据不变。训练集只出现 2 道墙；
+  O2 是零样本。评估：`--scene-type multi-wall --n-extra-walls 2 6`。
 - **O3**：评估时筛选 `detour≥1.45` 的场景（从 200 场景里选，或另生成 200
   个高 detour 场景）。报告样本数和配对统计。
 - **O4**：只在时间允许时做；不作为 G2 判据。
@@ -665,9 +672,17 @@ plan = s_K[..., 0]
 | NCA | K=12 共享 3×3 规则 | 预测 | 主臂 |
 
 - 所有臂共享适配器、障碍头、解码器、数据、动作标签、步数、seed。
-- CNN 与 NCA 匹配：12 层 3×3、C=32、hidden 96，参数量约 111K vs 115K，
-  感受野同为 25×25；CNN 每层也接收 ext（1×1 注入），差异只在权重共享/
-  迭代。
+- CNN 与 NCA 匹配（2026-10-30 修订）：CNN 输出与 NCA 同宽的 **32 通道状态**
+  （通道 0 = plan，其余 latent），解码器看到的场带宽一致；原实现 CNN 只输出
+  1 通道 plan、其余补零，NCA>CNN 可能只是“32 个学习通道 > 1 个标量”。
+  两档 CNN：`cnn`（12 层，参数匹配 ~111K vs NCA ~107K）与 `cnn --cnn-layers 32`
+  （感受野 65 ≥ G32，全局感受野对照，对应 R9 的 cnn_xxl）。
+- **带宽口径**：`--readout full`（默认）下 NCA/CNN/vis 暴露 32 通道，
+  GT/Euclid/random 只有通道 0；因此 NCA vs GT/Euclid 的主比较必须在
+  `--readout plan`（所有臂只暴露 plan 标量）下再跑一遍，两种口径都报。
+- zero-field 臂的 NCA **参与训练**（进优化器、同样的 plan 监督），与 NCA 臂
+  唯一差异是解码器看不到场（原实现 NCA 参数未进优化器，是 bug）。vis 臂的
+  1×1 投影同理已加入优化器。
 - Euclid：`plan = ||cell−goal||/G`（或归一化到 [0,1]），无障碍感知；
   用同一个 readout 进解码器。它故意“不懂墙”，用来检验“单调势场是否足够”。
 - GT-field：oracle 障碍 + oracle 测地场，作为上界；不参与主主张。
@@ -879,11 +894,23 @@ CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
     --ckpt ckpts/vla_lite/nca_s0 --stochastic-noise \
     --n-episodes 200 --seed 777 --json-out logs/vla_lite/nca_stoch_s0.json
 
-# O1 尺度：G64
+# O1 尺度：G64（同一权重；K 自动按 G 等比放大，--no-k-scale 关闭）
 CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
-    --low-ckpt ckpts/vla_lite/nca_s0 --teacher-subgoal --grid 64 \
-    --n-episodes 200 --seed 777 --det-noise \
+    --ckpt ckpts/vla_lite/nca_s0/last.pt --grid 64 \
+    --n-episodes 200 --seed 777 \
     --json-out logs/vla_lite/nca_teacher_g64_s0.json
+
+# O2 障碍复杂度：两墙基底 + 2–6 段额外墙（共 6–10 个墙矩形），零样本
+CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
+    --ckpt ckpts/vla_lite/nca_s0/last.pt --scene-type multi-wall \
+    --n-extra-walls 2 6 --n-episodes 200 --seed 777 \
+    --json-out logs/vla_lite/nca_teacher_o2_s0.json
+
+# 推理期探针：置零 / 只换 plan 通道（zero | plan-zero | plan-gt | plan-random）
+CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
+    --ckpt ckpts/vla_lite/nca_s0/last.pt --field-override zero \
+    --n-episodes 200 --seed 777 \
+    --json-out logs/vla_lite/nca_teacher_zero_s0.json
 
 # 5) 统计与图
 python scripts/analyze_vla_lite.py logs/vla_lite/*.json > assets/vla_lite/analysis.txt
@@ -987,3 +1014,27 @@ python scripts/plot_vla_lite.py --logs logs/vla_lite --out assets/vla_lite
 - [ ] O1/O2/O3；swap/探针。
 - [ ] 统计、图、`reports/VLA_LITE.md`；提交代码与资产（ckpt 不入库）。
 - [ ] 按 C0–C4 写结论；未过判据的部分明确写“未证明”，不升格。
+
+---
+
+## 13. 设计修订（2026-10-30，执行前）
+
+跑 pilot 之前的设计审查发现以下问题会让 G2 结论无法解读，已在代码中修复：
+
+| # | 问题 | 后果 | 修复 |
+|---|---|---|---|
+| 1 | CNN/GT/Euclid 臂只给解码器 1 个 plan 通道，NCA 臂给 32 通道（含视觉 latent） | NCA>CNN 可能只是带宽差，重演方法 1/E0 的归因问题 | `CNNField` 输出 32 通道状态；新增 `--readout plan`（所有臂只暴露通道 0），主比较两种口径都报 |
+| 2 | NCA K=12，与 12 层 CNN 感受野相同 | 去掉了 R9 中 NCA 优势的来源（深迭代到不动点）；G32 绕行传播不完、G64 必败，G2b 失败会被误读为“NCA 结构非必要” | 训练 random-K∈[16,64]，推理 K=64，评估 K∝G；`--fp-weight` 可选；固定 K=12 保留为消融 |
+| 3 | zero-field 臂的 NCA 参数不在优化器里 | zero 臂不是“同样训练、只隐藏场”的对照 | NCA 加入 zero 臂优化器并施加相同 plan 监督 |
+| 4 | vis 臂的 1×1 投影不在优化器里 | vis 带宽对照的投影层停留在随机初始化 | 加入优化器 |
+| 5 | 评估脚本无 `--grid`/K 覆盖/推理期探针/O2 场景 | O1/O2/§7.3 无法执行（`--scene-type random` 是单墙，比训练更简单） | `--grid`、`--k-steps`/`--no-k-scale`、`--field-override {zero,plan-zero,plan-gt,plan-random}`、`--scene-type multi-wall --n-extra-walls LO HI`（`scripts/vla_lite_ood.py`） |
+
+**修订后的 Stage A 主矩阵**：原七臂 + `cnn --cnn-layers 32`（全局感受野对照）；
+NCA/CNN/GT/Euclid 四臂在 `--readout plan` 下各补一组。预算优先级：先 3 臂 pilot
+（none / gt / nca，full），G0 过后再展开。
+
+**O2 口径更新**：训练场景 = 两道带缝墙（4 个墙矩形）；O2 = 同样两墙基底 + 2–6 段
+额外墙段（共 6–10 个矩形），零样本。
+
+**新增单测**（`scripts/test_vla_lite.py`）：NCA/CNN 状态同宽、`plan` 口径只保留
+通道 0、K 覆盖真实改变输出、G64 前向、四种推理期 override、O2 场景可达。

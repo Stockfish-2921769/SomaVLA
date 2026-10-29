@@ -23,9 +23,14 @@ class EuclidField(nn.Module):
 
 
 class CNNField(nn.Module):
-    """Feed-forward control: 12 3x3 layers, same nominal width as NCA."""
+    """Feed-forward control: fixed-depth 3x3 stack, same nominal width as NCA.
 
-    def __init__(self, ext_dim=77, hidden=32, layers=12):
+    Emits a `channels`-wide state (channel 0 = plan, rest = latent) so the
+    decoder sees the same field bandwidth as the NCA arm; otherwise an
+    NCA > CNN gap could just be 32 learned channels beating 1 scalar.
+    """
+
+    def __init__(self, ext_dim=77, hidden=32, layers=12, channels=32):
         super().__init__()
         self.inp = nn.Conv2d(ext_dim, hidden, 3, padding=1)
         self.blocks = nn.ModuleList([
@@ -33,7 +38,7 @@ class CNNField(nn.Module):
                 nn.Conv2d(hidden, hidden, 3, padding=1),
                 nn.GroupNorm(8, hidden), nn.GELU())
             for _ in range(layers)])
-        self.out = nn.Conv2d(hidden, 1, 1)
+        self.out = nn.Conv2d(hidden, channels, 1)
         nn.init.zeros_(self.out.weight)
         nn.init.zeros_(self.out.bias)
 

@@ -4,6 +4,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
 
@@ -145,6 +146,85 @@ def test_arm_init_parity():
     print("arm init parity ok")
 
 
+def test_field_bandwidth():
+    """NCA and CNN expose equal-width states; `plan` readout keeps ch 0."""
+    b = 2
+    ext = torch.randn(b, 77, 32, 32)
+    for layers in (12, 32):
+        cnn = CNNField(ext_dim=77, layers=layers)
+        assert cnn(ext).shape == (b, 32, 32, 32), layers
+    nca, cnn = NCA(), CNNField(ext_dim=77)
+    print("  params nca", count_parameters(nca), "cnn12",
+          count_parameters(cnn))
+
+    tok = torch.randn(b, 256, 768)
+    states = torch.tensor([[0.5, 0.3, 0.76, 0, 0, 0, 1.0]] * b)
+    subgoals = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
+    for arm in ("nca", "cnn", "vis"):
+        torch.manual_seed(0)
+        pol = VLALiteLowLevel(field_source=arm, readout_mode="plan")
+        for p in pol.parameters():            # break zero init
+            torch.nn.init.normal_(p, std=0.05)
+        out = pol(vis_tokens=tok, states=states, subgoals=subgoals,
+                  sample_steps=1)
+        f = out["field"]
+        assert f.shape == (b, 32, 32, 32), arm
+        assert torch.count_nonzero(f[:, 1:]).item() == 0, arm
+        assert torch.count_nonzero(f[:, :1]).item() > 0, arm
+    print("field bandwidth ok")
+
+
+def test_k_and_overrides():
+    b = 2
+    tok = torch.randn(b, 256, 768)
+    states = torch.tensor([[0.5, 0.3, 0.76, 0, 0, 0, 1.0]] * b)
+    subgoals = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
+    gt_plan = torch.rand(b, 32, 32)
+    torch.manual_seed(0)
+    pol = VLALiteLowLevel(field_source="nca")
+    for p in pol.nca.parameters():
+        torch.nn.init.normal_(p, std=0.05)
+    pol.eval()
+    kw = dict(vis_tokens=tok, states=states, subgoals=subgoals,
+              sample_steps=1, noise=torch.zeros(b, 8, 7))
+    p4 = pol(k_steps=4, **kw)["plan"]
+    p32 = pol(k_steps=32, **kw)["plan"]
+    assert not torch.allclose(p4, p32)          # K actually changes the run
+    out64 = pol(grid=64, k_steps=24, **kw)
+    assert out64["plan"].shape == (b, 64, 64)
+    assert out64["field_tokens"].shape == (b, 256, 256)
+
+    z = pol(field_override="zero", **kw)
+    assert torch.count_nonzero(z["field_tokens"]).item() == 0
+    pg = pol(field_override="plan-gt", gt_plan=gt_plan, **kw)
+    assert torch.allclose(pg["field"][:, 0], gt_plan)
+    base = pol(**kw)
+    assert torch.allclose(pg["field"][:, 1:], base["field"][:, 1:])
+    pz = pol(field_override="plan-zero", **kw)
+    assert torch.count_nonzero(pz["field"][:, 0]).item() == 0
+    pr = pol(field_override="plan-random", **kw)
+    assert pr["field"][:, 0].max() <= 1.0 + 1e-5
+    try:
+        VLALiteLowLevel(field_source="none")(field_override="plan-zero",
+                                            **kw)
+        raise AssertionError("plan override on no-field arm should fail")
+    except ValueError:
+        pass
+    print("K override + field overrides ok")
+
+
+def test_multi_wall_scene():
+    import numpy as np
+    from multi_task import _scene_reachable
+    from vla_lite_ood import sample_scene_multi_wall
+    rng = np.random.RandomState(0)
+    for _ in range(5):
+        objs, tgts, perm, walls = sample_scene_multi_wall(rng, (2, 6))
+        assert len(walls) >= 5, len(walls)
+        assert _scene_reachable(objs, tgts, walls)
+    print("multi-wall OOD scenes ok")
+
+
 def test_siglip():
     vis = FrozenSigLIP(device="cpu")
     x = torch.randint(0, 255, (2, 3, 256, 256), dtype=torch.uint8)
@@ -161,5 +241,8 @@ if __name__ == "__main__":
     test_high_level()
     test_policy_arms()
     test_arm_init_parity()
+    test_field_bandwidth()
+    test_k_and_overrides()
+    test_multi_wall_scene()
     test_siglip()
     print("ALL OK")
