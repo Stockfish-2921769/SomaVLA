@@ -30,12 +30,12 @@
 
 | 维度 | E0（SmolVLA 注入） | VLA-lite（本任务书） |
 |---|---|---|
-| 视觉/语言主干 | SmolVLM2-500M，冻结（`train_expert_only`） | SigLIP-B/16 视觉塔冻结；无 LLM，语言用冻结句向量槽 |
+| 视觉/语言主干 | SmolVLM2-500M，冻结（`train_expert_only`） | SigLIP-B/16 视觉塔冻结；无 LLM，语言用可学习任务槽 |
 | 场的来源 | 外部 4×64×64 通道，训练时 GT / 评估时替换 | NCA 在策略内部生成，端到端可微；另设 GT/Euclid/CNN 对照 |
 | 场的读取 | 64 个 field token 插入 prefix，冻结 VLM 不更新 | 专用空间适配器 + 动作解码器，读取端全部可训练 |
 | 场进入哪一层 | 只进低层 action expert | 可进低层、也可进高层（`NCA-low` / `NCA-both`） |
 | 位置编码 | prefix 113→177 token，RoPE 偏移 +57% | 无 LLM prefix；网格 token 走独立 readout，不改 RoPE |
-| 可训练参数 | ~100M expert + 0.218M 场编码器 | ~7.2M（视觉塔冻结） |
+| 可训练参数 | ~100M expert + 0.218M 场编码器 | ~7.4M（视觉塔冻结） |
 | 归因 | 场来源与注入实现混在一起 | 场生成器是唯一变量，读取端/数据/预算/评估全部固定 |
 
 ### 0.3 预注册判据（详见 §2.3）
@@ -51,8 +51,9 @@
 
 ### 0.4 预算
 
-- 2×RTX 4090；Stage A 单次 20K step、batch 64，预计 4–6 h；全矩阵 2–3 天。
-- 数据再生成 1–2 天（CPU），SigLIP 特征预计算约 30 GB 磁盘、数小时。
+- 2×RTX 4090；Stage A 单次 20K step、batch 64，实测约 8–10 min；全矩阵 2–3 天。
+- 数据再生成 1–2 天（CPU），SigLIP 特征预计算约 38 GB 磁盘（低层 9.8 GB +
+  高层 28.3 GB）、数十分钟。
 - 总周期 3–4 周（含调试与缓冲），里程碑见 §9。
 
 ---
@@ -110,7 +111,8 @@ E0 的实现有三个结构性限制，任何一个都足以让“场有没有�
 LLM：
 
 - **V**：冻结的 SigLIP-B/16 视觉塔（约 93M），提供通用视觉特征。
-- **L**：冻结句向量模型 + 可训练投影（语言槽），不是生成式 LLM。
+- **L**：可学习任务嵌入 + 可训练投影（语言槽），不是生成式 LLM；冻结句向量
+  接口预留，待离线权重可用时接入。
 - **A**：空间适配器 + NCA 规划核 + 动作解码器 + 高层决策头，全部可训练。
 
 去掉 LLM 的理由：
@@ -246,7 +248,7 @@ LLM 式推理。所有结论限定在双墙多物体抓放及其受控 OOD 上�
 ### 3.1 数据流总览
 
 ```
-RGB 256×256 ──resize 224──> SigLIP-B/16 (frozen) ──> 14×14×768 patch tokens
+RGB 256×256 ──native──> SigLIP-B/16 (frozen) ──> 16×16×768 patch tokens
                                                         │
                                               spatial adapter (trainable)
                                                         │
@@ -278,9 +280,10 @@ RGB 256×256 ──resize 224──> SigLIP-B/16 (frozen) ──> 14×14×768 pa
 ### 3.2 视觉前端（冻结）
 
 - **模型**：SigLIP-B/16 视觉塔，约 93M 参数，`requires_grad=False`。
-- **输入**：数据为 256×256 RGB；resize 到 224×224（双线性），归一化用
-  SigLIP 官方 mean/std。
-- **输出**：14×14×768 patch tokens（196 个）。
+- **输入**：数据为 256×256 RGB，原生分辨率直接输入；归一化 `x/255*2-1`
+  （等价均值 0.5、标准差 0.5）。权重来自本地缓存的 open_clip
+  `ViT-B-16-SigLIP-256`（webli），离线加载。
+- **输出**：16×16×768 patch tokens（256 个）。
 - **为什么冻结**：与 SmolVLA 的“预训练视觉先验”保持可比；可训练容量集中在
   适配器/NCA/解码器，避免 100M 级微调掩盖结构差异。另设一个“解冻最后一层”
   的诊断臂（§7.3），但不进主矩阵。
@@ -289,7 +292,7 @@ RGB 256×256 ──resize 224──> SigLIP-B/16 (frozen) ──> 14×14×768 pa
 
 ### 3.3 空间适配器与障碍头（可训练）
 
-- **输入**：14×14×768 patch tokens（reshape 成 14×14 特征图）。
+- **输入**：16×16×768 patch tokens（reshape 成 16×16 特征图）。
 - **结构**：
   1. 1×1 conv 768→256；
   2. 双线性插值到 32×32；
@@ -365,7 +368,7 @@ plan = s_K[..., 0]
   pre-norm，self-attention 同时看网格和上下文 token。
 - **输出头**：`Linear(256→256) + SiLU + Linear(256→8×7)`，输出 8 步动作
   chunk；训练用 flow matching，推理用 10 步 Euler 积分。
-- **参数**：约 3.85M。
+- **参数**：约 3.39M。
 - **动作语义**：与 E0 完全一致——绝对 plant target
   `[x,y,z,rot(3),grip]`，不是 delta；归一化用训练集 mean/std，rot 在本任务
   恒定（训练时置零，推理保留当前 rot）。
@@ -377,10 +380,10 @@ plan = s_K[..., 0]
 
 - **查询时机**：每个 visit 开始时（hover 处）查询一次，输出该 visit 的终端
   命令 `[gx,gy,gz,open]`，与 E0 的 visit command 同语义。
-- **输入**：SigLIP patch tokens（经适配器后的 32×32×64 特征）、state、
-  language、以及（NCA-both 臂）NCA 池化场特征。
-- **结构**：2 层 Transformer，d=256，8 heads；网格 token 做 cross-attention
-  池化 + 全局平均；接 `Linear→SiLU→Linear(4)`。约 1.72M。
+- **输入**（base 臂，已实现）：SigLIP patch tokens（256×768）、归一化
+  state、language token；（NCA-both 臂）另加 NCA 池化场特征。
+- **结构**：2 层 Transformer，d=256，8 heads；vision/state/language token
+  与 learned query 拼接，取 query 输出接 `Linear(256→4)`。约 1.92M。
 - **输出归一化**：用 visit 数据集的 `ch_mean/ch_std`；评估时反归一化。
 - **训练**：Stage B，BC 于 teacher visit command；NCA 冻结（来自 Stage A）。
 - **两种高层臂**：
@@ -392,13 +395,15 @@ plan = s_K[..., 0]
 
 ### 3.7 语言槽（无 LLM）
 
-- **主臂**：冻结 `all-MiniLM-L6-v2`（约 22M，384 维），加可训练
-  `Linear(384→256)`；只编码模板指令，不生成文本。
-- **指令模板**：`"place the three blocks on the matching colored targets and avoid the walls"`，
-  全场景同一条。当前任务的语言是常量，语言槽主要保证接口完整，不应期待
-  语言带来增益。
-- **消融**：`learned task token`（8 维可学习嵌入，广播进 NCA）替代 MiniLM；
-  以及 language swap（换成无关指令）作为 sanity check，预期无显著影响。
+- **主臂（已实现）**：`learned task token`——8 维可学习任务嵌入 +
+  `Linear(8→256)`；嵌入同时广播进 NCA（`task8`）和解码器/高层（token）。
+  当前任务指令恒定，语言槽主要保证接口完整，不应期待语言带来增益。
+- **预留消融**：冻结 `all-MiniLM-L6-v2`（约 22M，384 维）+ `Linear(384→256)`。
+  当前机器离线且无该权重，故实现为 learned slot；权重可用时再作为消融接入。
+- **指令模板**（未来接入句向量时使用）：
+  `"place the three blocks on the matching colored targets and avoid the walls"`，
+  全场景同一条。
+- **language swap**（换成无关指令/任务 id）作为 sanity check，预期无显著影响。
 - **边界**：不声称开放词汇或指代理解；若未来做“按语言指定顺序/目标”的
   变体，再引入可区分的指令和语言泛化实验。
 
@@ -406,13 +411,13 @@ plan = s_K[..., 0]
 
 | 模块 | 参数量 | 是否训练 | 备注 |
 |---|---:|---|---|
-| SigLIP-B/16 视觉塔 | ~93M | 冻结 | 14×14×768 |
+| SigLIP-B/16 视觉塔 | ~92.9M | 冻结 | 16×16×768 |
 | 空间适配器 + 障碍头 | 1.39M | 是 | 32×32×64 + logits |
-| NCA 核 | 0.115M | 是 | K=12，3×3 共享规则 |
-| 动作解码器 | 3.85M | 是 | 4 层 d=256 |
-| 高层决策 | 1.72M | 是 | 2 层 d=256 |
-| 语言投影（+MiniLM） | 0.10M（+22M 冻结） | 是 | 384→256 |
-| **可训练合计** | **~7.2M** | | 视觉塔冻结 |
+| NCA 核 | 0.107M | 是 | K=12，3×3 共享规则 |
+| 动作解码器 | 3.39M | 是 | 4 层 d=256 |
+| 高层决策 | 1.92M | 是 | 2 层 d=256（含未启用的 field 投影） |
+| 语言投影（learned slot） | 0.002M | 是 | 8→256 |
+| **可训练合计** | **~7.4M** | | 低层 5.49M + 高层 1.92M |
 
 - 单次前向：SigLIP 是主要开销（约 17 GFLOPs/图）；NCA 12 次迭代约 1.2 GMAC；
   解码器 4 层 × 260 token 约 1 GMAC/chunk；flow 10 步约 10 GMAC/chunk。
@@ -565,9 +570,11 @@ plan = s_K[..., 0]
 ### 5.4 工程细节
 
 - **预计算 SigLIP 特征**（视觉塔冻结，特征精确）：
-  - 低层 25,004×196×768 fp16 ≈ 7.5 GB；
-  - 高层 72,000×196×768 fp16 ≈ 21.7 GB；
-  - 总计约 30 GB。用 `np.memmap` 或分片 `.npy` 存储；训练时按 index 读取。
+  - 低层 25,004×256×768 fp16 ≈ 9.8 GB；
+  - 高层 72,000×256×768 fp16 ≈ 28.3 GB；
+  - 总计约 38 GB。用 `np.memmap` 或分片 `.npy` 存储；训练时按 index 读取。
+  - 注意：`NpzFile` 每次切片都会重新解压整个数组，预计算/训练前须一次性
+    载入图像或数组，否则吞吐会掉一个量级（实测 128 图切片约 12 s）。
   - 若磁盘不足，改为在线前向（慢 2–3×）；或只对 train split 预计算。
 - **数据加载**：低层样本是 npz 里的 uint8 图像，读取/归一化开销小；预计算
   特征后瓶颈在 NCA BPTT 和解码器。`num_workers=8`，`pin_memory=True`。
@@ -726,7 +733,7 @@ plan = s_K[..., 0]
 | 场监督 | λ_plan 0 / 0.1 / 0.5 | 辅助场损失是否帮助动作？ | 高 |
 | 网格 | G16 / 32 / 64 | 分辨率与尺度外推 | 高 |
 | 视觉解冻 | 冻结 / 最后一层微调 | 域差距是否限制上限？ | 中 |
-| 语言 | MiniLM / learned token / swap | 语言槽是否有任何作用？ | 中 |
+| 语言 | learned token / MiniLM（待权重）/ swap | 语言槽是否有任何作用？ | 中 |
 | 障碍头 | 预测 / GT | 视觉误差 vs 场误差 | 中 |
 | 解码器 | 4 层 / 2 层 / MLP | 容量是否足够读场？ | 中 |
 | 高层 | vision / nca / gt | 高层是否用场？ | 高 |
@@ -809,10 +816,10 @@ plan = s_K[..., 0]
 soma/vla_lite/
   __init__.py
   vision.py          # 冻结 SigLIP 包装 + 特征预计算接口
-  adapter.py         # 14×14×768 → 32×32×64，障碍头
+  adapter.py         # 16×16×768 → 32×32×64，障碍头
   nca.py             # 网格无关 NCA 核（K、dt、FiLM/ext 注入）
   decoder.py         # 4 层动作解码器 + flow matching
-  language.py        # 冻结 MiniLM / learned token
+  language.py        # learned task token（MiniLM 接口预留）
   high_level.py      # visit 决策头
   policy.py          # 端到端包装（低层+高层）
   baselines.py       # Euclid / CNN / GT / random 场生成器
@@ -833,9 +840,9 @@ assets/vla_lite/
 ### 10.2 复现命令（草案）
 
 ```bash
-# 0) 数据（CPU，一次）
-python scripts/vla_lite_data.py --n-episodes 600 --seed 0 \
-    --out data/vla_lite_2w.npz --visit-out data/vla_lite_visit_2w.npz
+# 0) 数据（CPU，一次；从 E0 的 multi_*_2w.npz 派生）
+python scripts/vla_lite_data.py \
+    --out-low data/vla_lite_2w.npz --out-visit data/vla_lite_visit_2w.npz
 
 # 1) 冻结视觉特征（每卡分片）
 CUDA_VISIBLE_DEVICES=0 python scripts/precompute_siglip.py \
@@ -849,23 +856,28 @@ CUDA_VISIBLE_DEVICES=0 python scripts/train_vla_lite_low.py \
     --arm nca --seed 0 --steps 20000 --batch 64 \
     --out ckpts/vla_lite/nca_s0
 
-# 3) Stage B：高层（示例：HL-nca s0）
+# 3) Stage B：高层（示例：base s0；NCA-both 变体待 Stage A 场特征接入）
 CUDA_VISIBLE_DEVICES=1 python scripts/train_vla_lite_high.py \
     --data data/vla_lite_visit_2w.npz --feat data/feat_visit_fp16.npy \
-    --low-ckpt ckpts/vla_lite/nca_s0 --field nca --seed 0 --steps 8000 \
-    --out ckpts/vla_lite/hl_nca_s0
+    --seed 0 --steps 8000 \
+    --out ckpts/vla_lite/high_s0
 
-# 4) 闭环评估（内部/外部、teacher/预测高层、det-noise）
+# 4) 闭环评估（外部 200 场景，teacher 高层，det-noise 默认开启）
 CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
-    --low-ckpt ckpts/vla_lite/nca_s0 --high-ckpt ckpts/vla_lite/hl_nca_s0 \
-    --n-episodes 200 --seed 777 --det-noise --batch-episodes 16 \
-    --json-out logs/vla_lite/nca_both_s0.json
-
-# 机制对比：teacher subgoal
-CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
-    --low-ckpt ckpts/vla_lite/nca_s0 --teacher-subgoal \
-    --n-episodes 200 --seed 777 --det-noise \
+    --ckpt ckpts/vla_lite/nca_s0 \
+    --n-episodes 200 --seed 777 --batch-episodes 16 \
     --json-out logs/vla_lite/nca_teacher_s0.json
+
+# 预测高层（主报告用；Stage B ckpt）
+CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
+    --ckpt ckpts/vla_lite/nca_s0 --high-ckpt ckpts/vla_lite/high_s0 \
+    --n-episodes 200 --seed 777 --batch-episodes 16 \
+    --json-out logs/vla_lite/nca_pred_s0.json
+
+# 机制对比：随机 flow 噪声（关掉 det-noise；仅诊断）
+CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
+    --ckpt ckpts/vla_lite/nca_s0 --stochastic-noise \
+    --n-episodes 200 --seed 777 --json-out logs/vla_lite/nca_stoch_s0.json
 
 # O1 尺度：G64
 CUDA_VISIBLE_DEVICES=0 python scripts/eval_vla_lite.py \
@@ -897,8 +909,8 @@ python scripts/plot_vla_lite.py --logs logs/vla_lite --out assets/vla_lite
 
 1. **视觉塔**：SigLIP-B/16（默认，便于与 SmolVLA 对照）vs DINOv2-S
    （可能更适合空间，但失去对照）。建议先 SigLIP，DINOv2 作为诊断。
-2. **语言槽**：冻结 MiniLM（默认）vs learned task token。当前指令恒定，
-   两者预计无差；建议主臂 MiniLM，消融 learned。
+2. **语言槽**：learned task token（已实现，默认）vs 冻结 MiniLM（待离线
+   权重）。当前指令恒定，两者预计无差；主臂用 learned，MiniLM 作为消融。
 3. **高层动作空间**：终端 visit command（默认，与 E0 同语义）vs
    对象/目标离散 ID。建议主臂 command，ID 版作为可解释性消融。
 4. **数据**：再生成（默认，含 split/ID/32×32 场）vs 修补现有 npz。
@@ -934,9 +946,8 @@ python scripts/plot_vla_lite.py --logs logs/vla_lite --out assets/vla_lite
 
 | 张量 | 形状 | 说明 |
 |---|---|---|
-| image | `[B,3,256,256]` uint8 | 原始渲染 |
-| image_resized | `[B,3,224,224]` float | SigLIP 输入 |
-| patch_tokens | `[B,196,768]` | 14×14 |
+| image | `[B,3,256,256]` uint8 | 原始渲染（即 SigLIP 输入，无 resize） |
+| patch_tokens | `[B,256,768]` | 16×16 |
 | adapter_feat | `[B,64,32,32]` | 视觉外部输入 |
 | obstacle_logits | `[B,1,32,32]` | BCE 监督 |
 | nca_state | `[B,32,32,32]` | plan + latent |
@@ -966,7 +977,7 @@ python scripts/plot_vla_lite.py --logs logs/vla_lite --out assets/vla_lite
 ## 附录 C：一页执行清单
 
 - [ ] 再生成低层/高层数据，写 split/ID/32×32 场；跑指纹断言。
-- [ ] 预计算 SigLIP 特征；检查磁盘 ~30 GB。
+- [ ] 预计算 SigLIP 特征；检查磁盘 ~38 GB。
 - [ ] 实现 `soma/vla_lite/{vision,adapter,nca,decoder,language,high_level,policy,baselines}.py`。
 - [ ] 实现 `train_vla_lite_low.py`，先跑 no-field/GT/NCA 三臂 pilot。
 - [ ] G0：确定性、IoU、GT−no-field ≥10 pp、no-field 与 E0 基线 ±5 pp。
