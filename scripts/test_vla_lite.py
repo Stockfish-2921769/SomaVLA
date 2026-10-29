@@ -127,6 +127,24 @@ def test_policy_arms():
     print("policy arms ok")
 
 
+def test_arm_init_parity():
+    """Shared stack must be init-identical across arms for a fixed seed."""
+    arms = ["nca", "none", "zero", "random", "euclid", "cnn", "vis"]
+    shared = {"adapter", "nca", "readout", "decoder", "language"}
+    ref = None
+    for arm in arms:
+        torch.manual_seed(0)
+        pol = VLALiteLowLevel(field_source=arm)
+        sd = {k: v.clone() for k, v in pol.state_dict().items()
+              if k.split(".")[0] in shared}
+        if ref is None:
+            ref = sd
+            continue
+        for k, v in sd.items():
+            assert torch.equal(v, ref[k]), (arm, k)
+    print("arm init parity ok")
+
+
 def test_siglip():
     vis = FrozenSigLIP(device="cpu")
     x = torch.randint(0, 255, (2, 3, 256, 256), dtype=torch.uint8)
@@ -142,5 +160,6 @@ if __name__ == "__main__":
     test_shapes()
     test_high_level()
     test_policy_arms()
+    test_arm_init_parity()
     test_siglip()
     print("ALL OK")

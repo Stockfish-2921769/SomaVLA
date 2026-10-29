@@ -36,15 +36,18 @@ class VLALiteLowLevel(nn.Module):
         self.vision = vision
         self.adapter = SpatialAdapter(vis_dim, d, vision_ch)
         self.nca = NCA(channels=32, vision_ch=vision_ch, task_dim=task_dim)
+        self.readout = FieldReadout(in_ch=32, d=d, out_grid=16)
+        self.decoder = FlowActionDecoder(d=d, chunk=chunk,
+                                         action_dim=action_dim)
+        self.language = LanguageSlot(d=d, task_dim=task_dim, n_tasks=n_tasks)
+        # Built after the shared stack: an arm-specific parameterized module
+        # here would otherwise consume RNG and shift readout/decoder init,
+        # confounding cross-arm comparisons for a fixed seed.
         self.cnn = CNNField(ext_dim=self.nca.ext_dim) if arm == "cnn" else None
         self.euclid = EuclidField() if arm == "euclid" else None
         # equal-bandwidth perception control: raw adapter features through the
         # same readout, no iterative field computation
         self.vis_field = nn.Conv2d(vision_ch, 32, 1) if arm == "vis" else None
-        self.readout = FieldReadout(in_ch=32, d=d, out_grid=16)
-        self.decoder = FlowActionDecoder(d=d, chunk=chunk,
-                                         action_dim=action_dim)
-        self.language = LanguageSlot(d=d, task_dim=task_dim, n_tasks=n_tasks)
         self.register_buffer("st_mean", torch.zeros(7))
         self.register_buffer("st_std", torch.ones(7))
         self.register_buffer("ch_mean", torch.zeros(4))
