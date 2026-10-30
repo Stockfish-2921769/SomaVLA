@@ -19,6 +19,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
+from soma.vla_lite.determinism import (enable_determinism, loader_generator,
+                                       seed_everything)
 from soma.vla_lite.policy import VLALiteLowLevel
 
 
@@ -86,7 +88,8 @@ def batch_loss(pol, batch, args, k_steps=None):
     out = pol(vis_tokens=batch["feat"], states=batch["state"],
               subgoals=batch["subgoal"], actions_norm=action_norm,
               gt_plan=batch["plan"], gt_obstacle=batch["obstacle"],
-              field_dropout=args.field_dropout, k_steps=k_steps)
+              field_dropout=args.field_dropout,
+              goal_dropout=args.goal_dropout, k_steps=k_steps)
     loss = out["loss"]
     plan_loss = torch.zeros((), device=loss.device)
     mask = (batch["obstacle"] < 0.5).float()
@@ -148,6 +151,12 @@ def main():
     ap.add_argument("--plan-weight", type=float, default=0.1)
     ap.add_argument("--obs-weight", type=float, default=0.5)
     ap.add_argument("--field-dropout", type=float, default=0.1)
+    ap.add_argument("--goal-dropout", type=float, default=0.0,
+                    help="per-sample prob. of hiding subgoal xy from the "
+                         "decoder (field still gets it), so the goal must "
+                         "be read from the field")
+    ap.add_argument("--deterministic", action="store_true",
+                    help="deterministic CUDA kernels (pilot §6.2)")
     ap.add_argument("--lr-adapter", type=float, default=3e-4)
     ap.add_argument("--lr-nca", type=float, default=1e-3)
     ap.add_argument("--lr-decoder", type=float, default=1e-4)
@@ -163,10 +172,9 @@ def main():
     args = ap.parse_args()
     resolve_k(args)
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    if args.deterministic:
+        enable_determinism()
+    seed_everything(args.seed)
     os.makedirs(args.out, exist_ok=True)
 
     tr = LowLevelData(args.data, args.feat, 0, args.limit)
@@ -206,6 +214,7 @@ def main():
     tr_loader = DataLoader(tr, batch_size=args.batch, shuffle=True,
                            num_workers=args.num_workers, pin_memory=True,
                            drop_last=True,
+                           generator=loader_generator(args.seed),
                            persistent_workers=args.num_workers > 0)
     va_loader = DataLoader(va, batch_size=args.batch, shuffle=False,
                            num_workers=args.num_workers, pin_memory=True,

@@ -40,9 +40,12 @@
 
 ### 0.3 预注册判据（详见 §2.3）
 
-- **G0 基础设施**：评估确定性、障碍 IoU ≥ 0.90、GT 场臂 ≥ no-field +10 pp。
-- **G1 NCA 通道**：NCA 臂 ≥ no-field +10 pp（配对显著），且推理时置零/交换场
-  至少掉 5 pp。
+- **G0 基础设施**：训练与评估确定性、障碍 IoU ≥ 0.90、跨臂初始化/数据顺序
+  一致。teacher 子目标协议只报上限、不再设门（试点已饱和，见 §13.2）。
+- **G1 场通道**（预测高层协议）：NCA ≥ no-field +10 pp（≥5 个确定性 seed，
+  seed 层显著），且推理时置零场至少掉 5 pp。
+- **G1b 归因**（新增，G2 前置）：区分“规划场”与“低层看得见场景”——
+  `plan-zero` 探针、`--readout plan` 臂、修复后的 vis 臂三项检验。
 - **G2 NCA 特异性**：分布内 NCA 不差于 CNN/Euclid 5 pp 以上；G32→G64 尺度外推
   NCA 掉点 ≤5 pp 且比 CNN 高 ≥10 pp；障碍数 4–8 的 OOD 上 NCA 比 CNN/Euclid
   高 ≥10 pp（5–10 pp 只算弱证据）。
@@ -189,24 +192,59 @@ LLM 式推理。所有结论限定在双墙多物体抓放及其受控 OOD 上�
 
 #### G0：基础设施（不过则不做科学）
 
-- **确定性**：同一 ckpt 连跑两次，200 场景逐场景结果完全一致（含 det-noise）。
+- **评估确定性**：同一 ckpt 连跑两次，200 场景逐场景结果完全一致（含 det-noise）。
+- **训练确定性**（2026-10-30 新增）：同配置 `--deterministic` 训练两次，
+  `train_log.jsonl` 逐步一致。试点发现同 seed 重跑仅因 CUDA 非确定性核就
+  33.0%→42.5%，不加此项，臂间差异混入 ±5–10 pp 运行噪声。
 - **障碍读取**：验证集障碍 IoU ≥ 0.90；若 <0.90，先修视觉/障碍头，不比较场源。
-- **通道上界**：GT 场臂（teacher subgoal）≥ no-field +10 pp，配对单侧
-  McNemar p<0.05；否则说明读取端/解码器仍不会用场。
-- **基线可比**：VLA-lite no-field（预测高层）在外部 200 场景上落在 E0
-  SmolVLA no-field 的 ±5 pp 内（E0：87%/88%）。若明显更低，先查高层容量、
-  数据切分和动作解码，不进入 G1。
+- ~~**通道上界**：GT 场臂（teacher subgoal）≥ no-field +10 pp~~（撤销）：
+  试点 teacher 协议各臂 95.5–100%，GT 反而显著低于 no-field（p=.022），
+  +10 pp 不可达。teacher 结果只作上限参考报告。
+- **基线可比**（降为诊断，不设门）：试点 VLA-lite no-field（预测高层）24.3%，
+  E0 SmolVLA no-field 87%/88%，差 ~60 pp。原因之一是结构性的：VLA-lite 的
+  no-field 低层**看不到图像**（解码器只收 state/subgoal/语言），而 SmolVLA 的
+  expert 始终看图；另一个是高层（val xy 误差 3.8 cm，31.7% 超抓取半径）。
+  因此 G1 的结论必须注明“在当前高层下”，高层改进（P1）并行推进。
 - **泄漏检查**：训练场景指纹与 val/test/外部 200 场景无交集；同一 scene 的
   chunk/visit 不跨切分。
 
 #### G1：NCA 通道
 
-- 主对比（teacher subgoal，分布内，3 seed 合并）：
-  **NCA − no-field ≥ +10 pp**，配对单侧 p<0.05，bootstrap 95% CI 下界 >0。
-- 顺序控制：NCA ≥ zero-field、random-field（至少各高 5 pp）。
-- 敏感性：推理时把 NCA 场置零 → 掉 ≥5 pp；把 NCA 场换成 GT 场 → 变化
-  应小（说明 NCA 场已接近上界）或明确记录方向。
+- 主对比（**预测高层**，分布内，≥5 个 `--deterministic` seed）：
+  **NCA − no-field ≥ +10 pp**；检验在 seed 层（逐 seed 配对差的单侧 t 检验
+  或符号检验 p<0.05，seed 层 95% CI 下界 >0）。场景池化 bootstrap 只作描述：
+  试点池化 CI [+18.5,+25.7]，seed 层 CI 约 [+8.8,+35.4]。
+- 顺序控制：NCA ≥ random-field（至少高 5 pp）。zero-field 不再作为控制：
+  在本架构中它与 no-field 给解码器的输入完全相同（网格 token 均为零），
+  “≡ no-field”是构造必然，不携带信息。
+- 敏感性：推理时 `--field-override zero` → 掉 ≥5 pp。
 - **不通过即停止**：不跑 G2，先诊断解码器是否忽略场（见 §7.3 探针）。
+- 试点状态：旧代码（K=12、非确定性）+22.1 pp、5/5 seed，方向已满足，
+  须在修订代码上复现后才算通过。
+
+#### G1b：归因——规划场 vs 视觉通路（新增，G2 前置）
+
+no-field 臂的低层是“盲”的，NCA 臂是唯一把宽带视觉信息送进低层的通路，
+所以 G1 的增益可以来自“低层看得见场景”（例如用视觉纠正高层给偏的目标），
+而不必来自规划。试点的旁证：GT 测地场（完美规划）反而 −9.0 pp；收益集中在
+no-field 失败的场景（r=−0.55）。三项检验：
+
+| 检验 | 做法 | 判据 |
+|---|---|---|
+| (i) plan 是否被读 | 现有 NCA ckpt 推理 `--field-override plan-zero` | 掉 ≥5 pp |
+| (ii) 标量场本身 | 训 `nca --readout plan` | 比 no-field ≥ +10 pp |
+| (iii) 是否只是视觉 | 修复后的 `vis`（同 32 通道带宽、无迭代） | NCA − vis ≥ +5 pp |
+
+辅助：评估 JSON 的 `visit_log` 按“下发目标误差 > 抓取半径”分桶，比较
+NCA 与 no-field 在坏目标 visit 上的完成率（视觉纠偏的直接证据）；
+`--hide-goal` 探针检验场是否单独携带目标信息。
+
+| (i) | (ii) | (iii) | 可写的结论 |
+|---|---|---|---|
+| 过 | 过 | 过 | 规划场有效，且不只是视觉通路 → 进入 G2 |
+| 不过 | — | 过 | 结构化场模块作为视觉注入方式优于原始特征；不写“规划” |
+| 不过 | 不过 | 不过 | 增益来自“低层看得见场景”，与 NCA 无关 |
+| 其他组合 | | | 逐项如实报告，不升格 |
 
 #### G2：NCA 特异性
 
@@ -648,8 +686,11 @@ plan = s_K[..., 0]
 - **配对**：同一 scene、同一 plant 噪声、同一 det-noise，逐场景配对。
 - **主检验**：精确 McNemar（单侧用于预注册方向，双侧用于探索）。
 - **区间**：10,000 次 scene bootstrap 的 95% CI。
-- **seed**：3 seed 分层合并（先按 seed 算不一致对，再合并）；同时报告
-  每个 seed，禁止只报最好 seed。
+- **seed**（2026-10-30 修订）：≥5 个确定性 seed；主检验在 seed 层
+  （逐 seed 配对差），场景池化 bootstrap 只作描述（它忽略 seed 间方差，
+  试点中明显偏窄）；同时报告每个 seed，禁止只报最好 seed。试点 NCA−CNN
+  逐 seed 差 sd≈18 pp，要在 seed 层检出 +11 pp 约需 20 个 seed——先降方差
+  （确定性训练、改进高层）比堆 seed 划算。
 - **多重比较**：三个主对比（GT vs no-field；NCA vs CNN；NCA vs Euclid）
   用 Holm；其余为次级/描述性。
 - **功效**：n=200 时，+10 pp 的功效约 71%；+5 pp 功效不足。OOD 上 5–10 pp
@@ -1025,7 +1066,7 @@ python scripts/plot_vla_lite.py --logs logs/vla_lite --out assets/vla_lite
 |---|---|---|---|
 | 1 | CNN/GT/Euclid 臂只给解码器 1 个 plan 通道，NCA 臂给 32 通道（含视觉 latent） | NCA>CNN 可能只是带宽差，重演方法 1/E0 的归因问题 | `CNNField` 输出 32 通道状态；新增 `--readout plan`（所有臂只暴露通道 0），主比较两种口径都报 |
 | 2 | NCA K=12，与 12 层 CNN 感受野相同 | 去掉了 R9 中 NCA 优势的来源（深迭代到不动点）；G32 绕行传播不完、G64 必败，G2b 失败会被误读为“NCA 结构非必要” | 训练 random-K∈[16,64]，推理 K=64，评估 K∝G；`--fp-weight` 可选；固定 K=12 保留为消融 |
-| 3 | zero-field 臂的 NCA 参数不在优化器里 | zero 臂不是“同样训练、只隐藏场”的对照 | NCA 加入 zero 臂优化器并施加相同 plan 监督 |
+| 3 | zero-field 臂的 NCA 参数不在优化器里 | zero 臂不是“同样训练、只隐藏场”的对照 | NCA 加入 zero 臂优化器并施加相同 plan 监督（但见 §13.2：zero 臂对解码器与 no-field 等价，修了仍无信息量，已从控制中移除） |
 | 4 | vis 臂的 1×1 投影不在优化器里 | vis 带宽对照的投影层停留在随机初始化 | 加入优化器 |
 | 5 | 评估脚本无 `--grid`/K 覆盖/推理期探针/O2 场景 | O1/O2/§7.3 无法执行（`--scene-type random` 是单墙，比训练更简单） | `--grid`、`--k-steps`/`--no-k-scale`、`--field-override {zero,plan-zero,plan-gt,plan-random}`、`--scene-type multi-wall --n-extra-walls LO HI`（`scripts/vla_lite_ood.py`） |
 
@@ -1038,3 +1079,48 @@ NCA/CNN/GT/Euclid 四臂在 `--readout plan` 下各补一组。预算优先级�
 
 **新增单测**（`scripts/test_vla_lite.py`）：NCA/CNN 状态同宽、`plan` 口径只保留
 通道 0、K 覆盖真实改变输出、G64 前向、四种推理期 override、O2 场景可达。
+
+### 13.2 依据试点报告的第二轮修订（2026-10-30）
+
+依据 `reports/VLA_LITE_PILOT.md`（5 seed，旧代码 K=12）：
+
+| 试点发现 | 修订 |
+|---|---|
+| teacher 协议饱和（95.5–100%），GT 显著低于 no-field | G0 撤销“teacher +10 pp”门；G1 主协议改为预测高层 |
+| 同 seed 重跑 33.0%→42.5%（CUDA 非确定性） | `--deterministic`（训练高/低层）：`use_deterministic_algorithms` + cuBLAS workspace + SDPA math 路径；`F.interpolate` 双线性的 CUDA 反传无确定性实现，改为等价的固定矩阵乘（`soma/vla_lite/resize.py`），默认路径也用它 |
+| 数据顺序依赖全局 RNG，臂专属模块的构造会改变洗牌顺序 | 训练 DataLoader 用独立 `torch.Generator(seed)`，同 seed 各臂数据顺序一致 |
+| 池化 CI 偏窄、seed 间 sd 大 | 主检验移到 seed 层，≥5 个确定性 seed（§6.3） |
+| 解码器同时收到显式 subgoal，绕过场里的目标信息（§5.3） | `--goal-dropout p`（训练，按样本把解码器看到的 subgoal xy 置零，场仍收到目标）；`--hide-goal`（评估探针） |
+| no-field 低层是“盲”的，+22 pp 可能来自视觉而非规划 | 新增 G1b 归因门（§2.3）；修复后的 vis 臂成为必跑控制 |
+| 高层是瓶颈，需要知道低层是否在“救”坏目标 | 评估 JSON 新增逐 visit `visit_log`（下发命令、teacher 命令、xy 误差、是否指向同一候选、是否完成），摘要按“误差 > 抓取半径”分桶 |
+| 试点 CNN 只输出 1 通道 | 旧 CNN ckpt 自动以 1 通道加载（读 `cnn.out.weight` 形状），可直接复评；新训练一律 32 通道。旧 1 通道 CNN 的结果不并入 G2 |
+| zero 臂 ≡ no-field（p=1.0） | 构造必然：两臂解码器输入相同。移出控制集；“算力”对照由 NCA K=1 消融承担 |
+
+**下一轮建议顺序**（先便宜后贵）：
+
+```bash
+# 1) 零训练：现有 5 个 NCA ckpt 上做 G1b-(i)。基线必须用新代码重评，
+#    不能拿试点数字比：resize 改为矩阵乘后浮点求和顺序变了，闭环可能偏离
+for s in 0 1 2 3 4; do
+  C=ckpts/vla_lite/conf_nca_s$s/last.pt; H=ckpts/vla_lite/high_s0/last.pt
+  $PY scripts/eval_vla_lite.py --ckpt $C --high-ckpt $H \
+    --json-out logs/vla_lite/probe_nca_s${s}_base.json
+  for o in plan-zero zero; do
+    $PY scripts/eval_vla_lite.py --ckpt $C --high-ckpt $H \
+      --field-override $o --json-out logs/vla_lite/probe_nca_s${s}_$o.json
+  done
+  $PY scripts/eval_vla_lite.py --ckpt $C --high-ckpt $H --hide-goal \
+    --json-out logs/vla_lite/probe_nca_s${s}_hidegoal.json
+done
+
+# 2) 确定性冒烟：同配置训两次，比对 train_log.jsonl
+$PY scripts/train_vla_lite_low.py --arm nca --seed 0 --steps 300 \
+  --deterministic --out ckpts/vla_lite/det_a
+$PY scripts/train_vla_lite_low.py --arm nca --seed 0 --steps 300 \
+  --deterministic --out ckpts/vla_lite/det_b
+diff <(cut -d, -f1-5 ckpts/vla_lite/det_a/train_log.jsonl) \
+     <(cut -d, -f1-5 ckpts/vla_lite/det_b/train_log.jsonl)
+
+# 3) G1/G1b 矩阵（每臂 5 seed，--deterministic）：
+#    none / nca / nca --readout plan / vis / cnn（32 通道）
+```

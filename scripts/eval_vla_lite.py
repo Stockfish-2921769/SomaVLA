@@ -22,7 +22,7 @@ import torch
 from multi_lowlevel_data import oracle_cmd, H, STRIDE
 from multi_plan_data import obstacle_grid
 from multi_task import (sample_scene, render_scene, MultiEnv, N_OBJ,
-                        NEUTRAL_Z, XL, XH, YL, YH)
+                        NEUTRAL_Z, CONTACT_R, XL, XH, YL, YH)
 from spatial_plan_data import geodesic_field
 from soma.vla_lite.high_level import HighLevelPolicy
 from soma.vla_lite.language import LanguageSlot
@@ -56,6 +56,22 @@ def gt_field_g(env, goal_xy, g):
     return plan, obs.astype(np.float32)
 
 
+def _rate(visits):
+    k = sum(v["ok"] for v in visits)
+    return f"{k}/{len(visits)} ({k / max(len(visits), 1) * 100:.1f}%)"
+
+
+def visit_choice(env, xy):
+    """Candidate a command points at: nearest unplaced object (pick visit)
+    or nearest target (carry visit)."""
+    if env.attached:
+        d = np.linalg.norm(env.targets - xy, axis=1)
+    else:
+        d = np.linalg.norm(env.objs - xy, axis=1)
+        d[env.placed] = 1e9
+    return int(d.argmin())
+
+
 class Ep:
     def __init__(self, scene_id, objs, tgts, perm, walls, rng, max_steps,
                  visit_cap, exec_steps):
@@ -86,6 +102,8 @@ class Ep:
         self.plan_mse_sum = 0.0
         self.iou_sum = 0.0
         self.diag_n = 0
+        self.cur_visit = None
+        self.visit_log = []
 
     def visit_done(self):
         if self.cmd[3] < 0.5:
@@ -102,9 +120,24 @@ class Ep:
         self.lift_grip = float(self.state[6])
 
     def end_visit(self):
+        ok = self.visit_done()
         self.visits += 1
-        self.visits_ok += int(self.visit_done())
+        self.visits_ok += int(ok)
+        if self.cur_visit is not None:
+            self.cur_visit.update(ok=bool(ok), steps=self.visit_steps,
+                                  finished=True)
+            self.visit_log.append(self.cur_visit)
+            self.cur_visit = None
         self.finish_visit()
+
+    def flush_visit(self):
+        """Log a visit cut off by the episode step budget (not counted in
+        visits/visits_ok, matching the existing visit totals)."""
+        if self.cur_visit is not None:
+            self.cur_visit.update(ok=False, steps=self.visit_steps,
+                                  finished=False)
+            self.visit_log.append(self.cur_visit)
+            self.cur_visit = None
 
     def action(self):
         if self.lift > 0:
@@ -153,7 +186,7 @@ def det_noise_for(eps, chunk, action_dim, device):
 @torch.no_grad()
 def predict_chunks(pol, vision, eps, scenes, act_mean, act_std,
                    det_noise=True, diag=True, grid=32, k_steps=None,
-                   field_override=None):
+                   field_override=None, hide_goal=False):
     imgs = np.stack([render_scene(e.env.objs, scenes[e.scene_id][1],
                                   scenes[e.scene_id][2], e.env.placed,
                                   scenes[e.scene_id][3], e.state)
@@ -183,7 +216,7 @@ def predict_chunks(pol, vision, eps, scenes, act_mean, act_std,
                               dev)
     out = pol(vis_tokens=tok, states=st, subgoals=sg, sample_steps=10,
               noise=noise, grid=grid, k_steps=k_steps,
-              field_override=field_override, **kw)
+              field_override=field_override, hide_goal=hide_goal, **kw)
 
     if want_gt and has_plan:
         pred_plan = out["plan"].float().cpu().numpy()
@@ -230,6 +263,9 @@ def main():
                     default=None,
                     help="inference probe: zero = hide field; plan-* = "
                          "replace only the plan channel")
+    ap.add_argument("--hide-goal", action="store_true",
+                    help="inference probe: decoder does not see subgoal xy "
+                         "(field generator still does)")
     ap.add_argument("--max-steps", type=int, default=1500)
     ap.add_argument("--visit-cap", type=int, default=180)
     ap.add_argument("--exec-steps", type=int, default=STRIDE)
@@ -251,9 +287,13 @@ def main():
     train_grid = ca.get("grid", 32)
     grid = args.grid or train_grid
     readout = ca.get("readout", "full")
+    # pilot-era CNN ckpts emit the plan scalar only (cnn.out: 1 channel)
+    cnn_w = ck["model"].get("cnn.out.weight")
+    cnn_channels = cnn_w.shape[0] if cnn_w is not None else 32
     pol = VLALiteLowLevel(field_source=arm, grid=grid, chunk=8, action_dim=7,
                           readout_mode=readout,
-                          cnn_layers=ca.get("cnn_layers", 12))
+                          cnn_layers=ca.get("cnn_layers", 12),
+                          cnn_channels=cnn_channels)
     norm = ck["norm"]
     pol.set_norm(norm["st_mean"], norm["st_std"],
                  norm["ch_mean"], norm["ch_std"])
@@ -334,24 +374,34 @@ def main():
         eps = list(active.values())
         hi = [e for e in eps if e.need_high and not e.done]
         cmds = []
+        ocs = [oracle_cmd(e.env, e.state) for e in hi]
         if hi:
             if hl is None:
-                cmds = [oracle_cmd(e.env, e.state) for e in hi]
+                cmds = [oc.copy() for oc in ocs]
             else:
                 cmds = predict_high(hl, lang, vision, hi, scenes,
                                     h_st_mean, h_st_std, h_ch_mean, h_ch_std)
-                for e, c in zip(hi, cmds):
-                    oc = oracle_cmd(e.env, e.state)
+                for c, oc in zip(cmds, ocs):
                     hi_n += 1
                     hi_l1 += float(np.abs(c[:3] - oc[:3]).mean())
                     hi_open_ok += int((c[3] > 0.5) == (oc[3] > 0.5))
-        for e, c in zip(hi, cmds):
+        for e, c, oc in zip(hi, cmds, ocs):
             if args.subgoal_noise > 0:
                 r = np.random.RandomState(
                     (e.scene_id * 1000003 + e.visits * 9176 + 54321)
                     & 0x7FFFFFFF)
                 c[:2] = c[:2] + r.standard_normal(2) * args.subgoal_noise
             e.cmd = c.astype(np.float32)
+            # per-visit record: was the command already wrong at issue time?
+            e.cur_visit = dict(
+                visit=e.visits, placed0=int(e.env.n_placed()),
+                attached=bool(e.env.attached),
+                cmd=[float(v) for v in e.cmd],
+                oracle=[float(v) for v in oc],
+                xy_err=float(np.linalg.norm(e.cmd[:2] - oc[:2])),
+                open_ok=bool((e.cmd[3] > 0.5) == (oc[3] > 0.5)),
+                same_choice=(visit_choice(e.env, e.cmd[:2]) ==
+                             visit_choice(e.env, oc[:2])))
             e.placed0 = e.env.n_placed()
             e.visit_steps = 0
             e.need_high = False
@@ -366,7 +416,8 @@ def main():
             chunks = predict_chunks(
                 pol, vision, lo, scenes, act_mean, act_std,
                 det_noise=not args.stochastic_noise, diag=not args.no_diag,
-                grid=grid, field_override=args.field_override)
+                grid=grid, field_override=args.field_override,
+                hide_goal=args.hide_goal)
             for e, c in zip(lo, chunks):
                 e.chunk = c
                 e.chunk_i = 0
@@ -398,6 +449,7 @@ def main():
     lines = []
     for i in range(args.n_episodes):
         e = results[i]
+        e.flush_visit()
         s = bool(e.env.success())
         succ.append(s)
         placed.append(e.env.n_placed())
@@ -439,6 +491,20 @@ def main():
         summary.append(
             f"  high-level vs teacher: xyz L1 {hi_l1 / hi_n:.4f} (raw)  "
             f"open acc {hi_open_ok / hi_n:.3f}  (n={hi_n})")
+    vlog = [v for i in range(n) for v in results[i].visit_log
+            if v["finished"]]
+    if vlog and (hl is not None or args.subgoal_noise > 0):
+        # does the low level rescue visits whose issued goal was already off?
+        far = [v for v in vlog if v["xy_err"] > CONTACT_R]
+        near = [v for v in vlog if v["xy_err"] <= CONTACT_R]
+        wrong = [v for v in vlog if not v["same_choice"]]
+        summary.append(
+            f"  visits with goal xy err > {CONTACT_R * 100:.1f}cm: "
+            f"{len(far)}/{len(vlog)} ({len(far) / len(vlog) * 100:.1f}%)  "
+            f"ok {_rate(far)}  | err <= : ok {_rate(near)}")
+        summary.append(
+            f"  wrong-candidate commands {len(wrong)}/{len(vlog)}  "
+            f"ok {_rate(wrong)}")
     print("\n".join(summary))
     if args.out:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -456,6 +522,8 @@ def main():
                                   else None),
                 "grid": grid, "train_grid": train_grid, "k_steps": k_eval,
                 "readout": readout, "field_override": args.field_override,
+                "hide_goal": args.hide_goal,
+                "visit_log": [results[i].visit_log for i in range(n)],
                 "n": n, "success": succ, "placed": placed, "bumps": bumps,
                 "wall_hits": wh, "steps": steps,
                 "visits_total": visits_all, "visits_ok": visits_ok,

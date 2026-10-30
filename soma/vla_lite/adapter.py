@@ -10,6 +10,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .resize import resize_bilinear
+
 
 class ResBlock(nn.Module):
     def __init__(self, d):
@@ -42,7 +44,6 @@ class SpatialAdapter(nn.Module):
             raise ValueError(f"token count {n} is not a square grid")
         x = tokens.transpose(1, 2).reshape(b, d, h, h)
         x = self.inp(x)
-        x = F.interpolate(x, size=(size, size), mode="bilinear",
-                          align_corners=False)
+        x = resize_bilinear(x, (size, size))
         x = self.block(x)
         return self.out(x), self.obs(x)

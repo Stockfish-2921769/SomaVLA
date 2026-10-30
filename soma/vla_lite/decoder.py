@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .resize import resize_bilinear
+
 
 class FieldReadout(nn.Module):
     def __init__(self, in_ch=32, d=256, out_grid=16):
@@ -14,8 +16,7 @@ class FieldReadout(nn.Module):
 
     def forward(self, field):
         x = F.gelu(self.c1(field))
-        x = F.interpolate(x, size=(self.out_grid, self.out_grid),
-                          mode="bilinear", align_corners=False)
+        x = resize_bilinear(x, (self.out_grid, self.out_grid))
         x = F.gelu(self.norm(self.c2(x)))
         return x.flatten(2).transpose(1, 2)      # [B, out_grid^2, d]
 

@@ -213,6 +213,62 @@ def test_k_and_overrides():
     print("K override + field overrides ok")
 
 
+def test_resize_matches_interpolate():
+    import torch.nn.functional as F
+    from soma.vla_lite.resize import resize_bilinear
+    for (h, o) in [(16, 32), (32, 16), (16, 64), (64, 16), (32, 32)]:
+        x = torch.randn(2, 5, h, h)
+        ref = F.interpolate(x, size=(o, o), mode="bilinear",
+                            align_corners=False)
+        got = resize_bilinear(x, (o, o))
+        assert got.shape == ref.shape, (h, o)
+        assert torch.allclose(got, ref, atol=1e-5), (h, o,
+                                                      (got - ref).abs().max())
+    print("resize == F.interpolate ok")
+
+
+def test_goal_dropout_and_legacy_cnn():
+    b = 2
+    tok = torch.randn(b, 256, 768)
+    states = torch.tensor([[0.5, 0.3, 0.76, 0, 0, 0, 1.0]] * b)
+    sg_a = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
+    sg_b = torch.tensor([[0.60, 0.50, 0.52, 0.0]] * b)   # xy differs only
+    kw = dict(vis_tokens=tok, states=states, sample_steps=1,
+              noise=torch.zeros(b, 8, 7))
+    torch.manual_seed(0)
+    pol = VLALiteLowLevel(field_source="none")
+    for p in pol.decoder.parameters():
+        torch.nn.init.normal_(p, std=0.05)
+    pol.eval()
+    a = pol(subgoals=sg_a, **kw)["action"]
+    bb = pol(subgoals=sg_b, **kw)["action"]
+    assert not torch.allclose(a, bb)          # decoder reads subgoal xy
+    a = pol(subgoals=sg_a, hide_goal=True, **kw)["action"]
+    bb = pol(subgoals=sg_b, hide_goal=True, **kw)["action"]
+    assert torch.allclose(a, bb)              # hidden: xy no longer matters
+
+    torch.manual_seed(0)
+    nca = VLALiteLowLevel(field_source="nca")
+    for p in nca.parameters():
+        torch.nn.init.normal_(p, std=0.05)
+    nca.eval()
+    a = nca(subgoals=sg_a, hide_goal=True, **kw)["action"]
+    bb = nca(subgoals=sg_b, hide_goal=True, **kw)["action"]
+    assert not torch.allclose(a, bb)          # goal still reaches the field
+
+    old = VLALiteLowLevel(field_source="cnn", cnn_channels=1)
+    assert old.cnn.out.weight.shape[0] == 1
+    new = VLALiteLowLevel(field_source="cnn")
+    new.load_state_dict(new.state_dict())
+    old.load_state_dict(old.state_dict())
+    for p in old.cnn.parameters():
+        torch.nn.init.normal_(p, std=0.05)
+    out = old(subgoals=sg_a, **kw)
+    assert out["field"].shape == (b, 32, 32, 32)
+    assert torch.count_nonzero(out["field"][:, 1:]).item() == 0
+    print("goal dropout / hide-goal / legacy CNN ok")
+
+
 def test_multi_wall_scene():
     import numpy as np
     from multi_task import _scene_reachable
@@ -243,6 +299,8 @@ if __name__ == "__main__":
     test_arm_init_parity()
     test_field_bandwidth()
     test_k_and_overrides()
+    test_resize_matches_interpolate()
+    test_goal_dropout_and_legacy_cnn()
     test_multi_wall_scene()
     test_siglip()
     print("ALL OK")

@@ -8,7 +8,6 @@ import argparse
 import json
 import math
 import os
-import random
 import sys
 import time
 
@@ -19,6 +18,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
+from soma.vla_lite.determinism import (enable_determinism, loader_generator,
+                                       seed_everything)
 from soma.vla_lite.high_level import HighLevelPolicy
 from soma.vla_lite.language import LanguageSlot
 
@@ -94,12 +95,13 @@ def main():
     ap.add_argument("--log-every", type=int, default=100)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="ckpts/vla_lite/high_s0")
+    ap.add_argument("--deterministic", action="store_true",
+                    help="deterministic CUDA kernels (pilot §6.2)")
     args = ap.parse_args()
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    if args.deterministic:
+        enable_determinism()
+    seed_everything(args.seed)
     os.makedirs(args.out, exist_ok=True)
 
     tr = VisitData(args.data, args.feat, 0, args.limit)
@@ -129,6 +131,7 @@ def main():
     tr_loader = DataLoader(tr, batch_size=args.batch, shuffle=True,
                            num_workers=args.num_workers, pin_memory=True,
                            drop_last=True,
+                           generator=loader_generator(args.seed),
                            persistent_workers=args.num_workers > 0)
     va_loader = DataLoader(va, batch_size=args.batch, shuffle=False,
                            num_workers=args.num_workers, pin_memory=True,

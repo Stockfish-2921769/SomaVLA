@@ -9,6 +9,11 @@
         equal-bandwidth no-iteration perception control.
   plan  every arm exposes channel 0 (the plan scalar) only, so learned and
         scalar field sources are compared at identical bandwidth.
+
+The decoder also receives the subgoal vector directly, so it can ignore the
+field's goal information (pilot §5.3). `goal_dropout` (training) and
+`hide_goal` (inference probe) zero the subgoal xy in the decoder's state
+token only; the field generator still receives the goal.
 """
 import torch
 import torch.nn as nn
@@ -38,7 +43,7 @@ class VLALiteLowLevel(nn.Module):
     def __init__(self, vision=None, field_source="nca", grid=32,
                  vis_dim=768, vision_ch=64, task_dim=8, n_tasks=1,
                  d=256, chunk=8, action_dim=7, readout_mode="full",
-                 cnn_layers=12):
+                 cnn_layers=12, cnn_channels=32):
         super().__init__()
         arm = _ARM_ALIASES.get(field_source.lower(), field_source.lower())
         if arm not in {"nca", "gt", "euclid", "cnn", "vis",
@@ -59,8 +64,9 @@ class VLALiteLowLevel(nn.Module):
         # Built after the shared stack: an arm-specific parameterized module
         # here would otherwise consume RNG and shift readout/decoder init,
         # confounding cross-arm comparisons for a fixed seed.
+        # cnn_channels=1 only to load pilot-era ckpts (plan scalar only)
         self.cnn = (CNNField(ext_dim=self.nca.ext_dim, layers=cnn_layers,
-                             channels=self.nca.channels)
+                             channels=cnn_channels)
                     if arm == "cnn" else None)
         self.euclid = EuclidField() if arm == "euclid" else None
         # equal-bandwidth perception control: raw adapter features through the
@@ -103,7 +109,7 @@ class VLALiteLowLevel(nn.Module):
                 subgoals=None, task_ids=None, gt_plan=None, gt_obstacle=None,
                 actions_norm=None, noise=None, time=None, sample_steps=10,
                 grid=None, field_dropout=0.0, k_steps=None,
-                field_override=None):
+                field_override=None, goal_dropout=0.0, hide_goal=False):
         grid = self.grid if grid is None else grid
         if field_override is not None and \
                 field_override not in FIELD_OVERRIDES:
@@ -132,6 +138,10 @@ class VLALiteLowLevel(nn.Module):
             ext = self.nca.make_ext(feat, p_obs, goal_xy, start_xy, task8)
             field = self.cnn(ext)
             plan = field[:, 0]
+            pad = self.nca.channels - field.shape[1]
+            if pad > 0:                             # legacy 1-ch CNN
+                field = torch.cat([field, field.new_zeros(b, pad, grid,
+                                                          grid)], dim=1)
         elif self.field_source == "gt":
             if gt_plan is None or gt_obstacle is None:
                 raise ValueError("gt arm needs gt_plan and gt_obstacle")
@@ -169,6 +179,16 @@ class VLALiteLowLevel(nn.Module):
             tokens = tokens * keep
         state_norm = (states - self.st_mean) / self.st_std
         subgoal_norm = (subgoals - self.ch_mean) / self.ch_std
+        if hide_goal or (self.training and goal_dropout > 0):
+            # zero in normalized space = train-mean xy; z/open stay visible
+            # because the field carries no height or gripper information
+            if hide_goal:
+                keep = subgoal_norm.new_zeros(b, 1)
+            else:
+                keep = (torch.rand(b, 1, device=subgoal_norm.device) >=
+                        goal_dropout).to(subgoal_norm.dtype)
+            subgoal_norm = torch.cat([subgoal_norm[:, :2] * keep,
+                                      subgoal_norm[:, 2:]], dim=1)
 
         out = dict(plan=plan, obstacle_logits=obs_logits,
                    obstacle_prob=p_obs, field_tokens=tokens, field=field,
