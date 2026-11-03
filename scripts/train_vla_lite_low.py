@@ -95,7 +95,7 @@ def batch_loss(pol, batch, args, k_steps=None):
     mask = (batch["obstacle"] < 0.5).float()
     # zero arm trains its NCA with the same plan supervision as nca, so the
     # only difference between them is whether the decoder sees the field
-    if args.plan_weight > 0 and args.arm in {"nca", "cnn", "zero"}:
+    if args.plan_weight > 0 and args.arm in {"nca", "cnn", "vin", "zero"}:
         pred_plan = out["plan"]
         if pred_plan.ndim == 4:
             pred_plan = pred_plan[:, 0]
@@ -131,8 +131,8 @@ def main():
     ap.add_argument("--data", default="data/vla_lite_2w.npz")
     ap.add_argument("--feat", default="data/feat_low_fp16.npy")
     ap.add_argument("--arm", default="nca",
-                    choices=["nca", "cnn", "euclid", "gt", "vis", "none",
-                             "zero", "random"])
+                    choices=["nca", "cnn", "vin", "euclid", "gt", "vis",
+                             "none", "zero", "random"])
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--steps", type=int, default=20000)
     ap.add_argument("--batch", type=int, default=64)
@@ -202,6 +202,8 @@ def main():
                            lr=args.lr_adapter))
     if args.arm == "cnn":
         groups.append(dict(params=pol.cnn.parameters(), lr=args.lr_nca))
+    if args.arm == "vin":
+        groups.append(dict(params=pol.vin.parameters(), lr=args.lr_nca))
     opt = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
 
     def sched(step):

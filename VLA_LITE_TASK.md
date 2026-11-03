@@ -1122,5 +1122,45 @@ diff <(cut -d, -f1-5 ckpts/vla_lite/det_a/train_log.jsonl) \
      <(cut -d, -f1-5 ckpts/vla_lite/det_b/train_log.jsonl)
 
 # 3) G1/G1b 矩阵（每臂 5 seed，--deterministic）：
-#    none / nca / nca --readout plan / vis / cnn（32 通道）
+#    none / nca / nca --readout plan / vis / cnn（32 通道）/ vin / gt
 ```
+
+### 13.3 VIN 对照臂（2026-11-03）
+
+**为什么必须有**：NCA 规划核（共享 3×3 规则迭代 K 次）在结构上最接近
+Value Iteration Network（Tamar et al., NeurIPS 2016），VIN 正是“值迭代 =
+共享卷积迭代 K 次”。规划社区（ICAPS）审稿人的第一个问题会是“为什么不用
+VIN”。R9 里“迭代共享传播胜过同感受野 CNN”在 VIN/GPPN 文献中已是已知现象，
+所以 NCA 的论点必须相对 VIN 来立，而不是只相对 CNN。
+
+**实现**（`soma/vla_lite/baselines.py::VINField`，`--arm vin`）：
+- 奖励网络 `R = f(ext)`：3×3 conv(77→96) → GELU → 1×1(96→96) → GELU →
+  1×1(96→1)，隐藏宽度与 NCA 规则一致；
+- K 次共享 Bellman 备份：`Q = conv3x3([R, V])`（31 个动作通道），
+  `V = max_a Q`，`V_0 = 0`，共 K 次备份（与原论文一致）；
+- 输出 `[−V, Q]` 共 32 通道：通道 0 取 `−V`，与 GT plan `d/(2G)` 同方向
+  （近目标处小），因此 plan 监督、`--readout plan`、`plan-*` 探针全部通用；
+- K 与 NCA 共用同一套调度（训练 random-K，推理 K∝G）。
+- 参数约 77K（NCA 约 107K）；**保持忠实**：不冻结障碍 cell、无门控、无归一化，
+  墙只能经奖励网络学到。
+
+**与 NCA 的差异清单**（论文里要写明，任一项都可能解释 NCA−VIN 的差距）：
+
+| 维度 | NCA | VIN |
+|---|---|---|
+| 迭代状态 | 32 通道连续状态（plan + 31 latent） | 1 通道 V（Q 每步由 V 重算） |
+| 更新 | 残差 + tanh 有界 | max 备份，无界 |
+| 每步是否看 ext | 是（规则输入含 ext） | 否，只经 R |
+| 障碍 | alpha 冻结 | 奖励网络学 |
+| 参数 | ~107K | ~77K |
+
+**风险**：VIN 在大 K 下数值可能发散（无 γ 约束、无归一化）；若 random-K∈[16,64]
+训练出现 NaN 或发散，如实记录，并补一组 VIN 专用的较小 K（如 `--k-range 8 32`），
+不对 VIN 加 NCA 式的稳定化（那会把它变成另一个模型）。
+
+**判读**：
+- NCA ≈ VIN：把 NCA 写成“VIN 类迭代规划器的一个实例”，主线（学习的场 vs
+  神谕场 vs 纯视觉）不受影响；
+- NCA > VIN（seed 层显著）：再用上表逐项消融定位来源（例如 NCA 去掉 latent
+  只留 plan 通道迭代），否则不能声称是“NCA 结构”的胜利；
+- VIN > NCA：如实报告，主臂改用 VIN。

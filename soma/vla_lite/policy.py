@@ -4,7 +4,7 @@
 (adapter, obstacle head, readout, decoder, data, labels) stays identical.
 
 `readout_mode` controls field bandwidth into the decoder:
-  full  learned generators (nca/cnn) expose their whole 32-ch state; scalar
+  full  learned generators (nca/cnn/vin) expose their whole 32-ch state; scalar
         sources (gt/euclid/random) fill channel 0 only; `vis` is the
         equal-bandwidth no-iteration perception control.
   plan  every arm exposes channel 0 (the plan scalar) only, so learned and
@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 
 from .adapter import SpatialAdapter
-from .baselines import CNNField, EuclidField, random_smooth_field
+from .baselines import CNNField, EuclidField, VINField, random_smooth_field
 from .decoder import FieldReadout, FlowActionDecoder
 from .language import LanguageSlot
 from .nca import NCA
@@ -31,6 +31,7 @@ _ARM_ALIASES = {
     "feat": "vis", "none": "none", "nofield": "none", "no-field": "none",
     "zero": "zero", "zerofield": "zero", "zero-field": "zero",
     "random": "random", "randomfield": "random", "random-field": "random",
+    "vin": "vin",
 }
 
 READOUT_MODES = ("full", "plan")
@@ -46,7 +47,7 @@ class VLALiteLowLevel(nn.Module):
                  cnn_layers=12, cnn_channels=32):
         super().__init__()
         arm = _ARM_ALIASES.get(field_source.lower(), field_source.lower())
-        if arm not in {"nca", "gt", "euclid", "cnn", "vis",
+        if arm not in {"nca", "gt", "euclid", "cnn", "vin", "vis",
                        "none", "zero", "random"}:
             raise ValueError(f"unknown field_source {field_source!r}")
         if readout_mode not in READOUT_MODES:
@@ -68,6 +69,10 @@ class VLALiteLowLevel(nn.Module):
         self.cnn = (CNNField(ext_dim=self.nca.ext_dim, layers=cnn_layers,
                              channels=cnn_channels)
                     if arm == "cnn" else None)
+        # VIN state [-V, Q] is as wide as the NCA state (1 + 31 channels)
+        self.vin = (VINField(ext_dim=self.nca.ext_dim,
+                             n_actions=self.nca.channels - 1)
+                    if arm == "vin" else None)
         self.euclid = EuclidField() if arm == "euclid" else None
         # equal-bandwidth perception control: raw adapter features through the
         # same readout, no iterative field computation
@@ -142,6 +147,12 @@ class VLALiteLowLevel(nn.Module):
             if pad > 0:                             # legacy 1-ch CNN
                 field = torch.cat([field, field.new_zeros(b, pad, grid,
                                                           grid)], dim=1)
+        elif self.field_source == "vin":
+            ext = self.nca.make_ext(feat, p_obs, goal_xy, start_xy, task8)
+            # same K schedule as the NCA (random-K train, K ∝ G at eval)
+            field = self.vin(ext, k_steps=(self.nca.k_steps if k_steps is None
+                                           else k_steps))
+            plan = field[:, 0]
         elif self.field_source == "gt":
             if gt_plan is None or gt_obstacle is None:
                 raise ValueError("gt arm needs gt_plan and gt_obstacle")

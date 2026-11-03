@@ -49,6 +49,45 @@ class CNNField(nn.Module):
         return self.out(x)
 
 
+class VINField(nn.Module):
+    """Value Iteration Network (Tamar et al., NeurIPS 2016) on the same ext.
+
+    Reward net R = f(ext) (same hidden width as the NCA rule), then K shared
+    Bellman backups  Q = conv3x3([R, V]),  V = max_a Q,  V_0 = 0.
+    VIN is the closest prior iterative planner to the NCA, so it is the
+    baseline a planning reviewer expects. Kept faithful: no obstacle
+    freezing, no gating, no normalization (the NCA freezes obstacle cells via
+    alpha; VIN must learn walls through R).
+
+    Output is a `1 + n_actions`-channel state [-V, Q]: channel 0 is
+    distance-like (low near the goal), matching the GT plan d/(2G) and the
+    other arms, so the same plan loss and `--readout plan` apply.
+    """
+
+    def __init__(self, ext_dim=77, hidden=96, n_actions=31, k_steps=12):
+        super().__init__()
+        self.k_steps = k_steps
+        self.reward = nn.Sequential(
+            nn.Conv2d(ext_dim, hidden, 3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(hidden, hidden, 1),
+            nn.GELU(),
+            nn.Conv2d(hidden, 1, 1),
+        )
+        self.q = nn.Conv2d(2, n_actions, 3, padding=1)
+
+    def forward(self, ext, k_steps=None):
+        k = self.k_steps if k_steps is None else k_steps
+        r = self.reward(ext)
+        v = torch.zeros_like(r)
+        q = self.q(torch.cat([r, v], dim=1))
+        for _ in range(k - 1):                     # K backups in total
+            v = q.max(dim=1, keepdim=True).values
+            q = self.q(torch.cat([r, v], dim=1))
+        v = q.max(dim=1, keepdim=True).values
+        return torch.cat([-v, q], dim=1)
+
+
 def random_smooth_field(b, g, device, dtype=torch.float32, sigma=3.0):
     """Smooth low-frequency random field, normalized per sample to [0,1]."""
     z = torch.randn(b, 1, g, g, device=device, dtype=dtype)

@@ -198,7 +198,7 @@ def predict_chunks(pol, vision, eps, scenes, act_mean, act_std,
     st = torch.from_numpy(np.stack([e.state for e in eps])).float().to(dev)
     sg = torch.from_numpy(np.stack([e.cmd for e in eps])).float().to(dev)
 
-    has_plan = pol.field_source in {"nca", "cnn", "zero"}
+    has_plan = pol.field_source in {"nca", "cnn", "vin", "zero"}
     want_gt = pol.field_source == "gt" or field_override == "plan-gt" or (
         diag and has_plan)
     gt_plan = gt_obs = None

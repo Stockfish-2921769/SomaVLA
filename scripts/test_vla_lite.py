@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch
 
 from soma.vla_lite.adapter import SpatialAdapter
-from soma.vla_lite.baselines import CNNField, EuclidField, random_smooth_field
+from soma.vla_lite.baselines import (CNNField, EuclidField, VINField,
+                                     random_smooth_field)
 from soma.vla_lite.decoder import FieldReadout, FlowActionDecoder
 from soma.vla_lite.grid import XL, XH, YL, YH, cell_to_xy, xy_to_cell
 from soma.vla_lite.high_level import HighLevelPolicy
@@ -98,7 +99,7 @@ def test_policy_arms():
     subgoals = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
     gt_plan = torch.rand(b, 32, 32)
     gt_obs = (torch.rand(b, 32, 32) > 0.7).float()
-    for arm in ["nca", "gt", "euclid", "cnn", "vis", "none", "zero",
+    for arm in ["nca", "gt", "euclid", "cnn", "vin", "vis", "none", "zero",
                 "random"]:
         pol = VLALiteLowLevel(field_source=arm)
         pol.set_norm(torch.zeros(7), torch.ones(7),
@@ -130,7 +131,7 @@ def test_policy_arms():
 
 def test_arm_init_parity():
     """Shared stack must be init-identical across arms for a fixed seed."""
-    arms = ["nca", "none", "zero", "random", "euclid", "cnn", "vis"]
+    arms = ["nca", "none", "zero", "random", "euclid", "cnn", "vin", "vis"]
     shared = {"adapter", "nca", "readout", "decoder", "language"}
     ref = None
     for arm in arms:
@@ -160,7 +161,7 @@ def test_field_bandwidth():
     tok = torch.randn(b, 256, 768)
     states = torch.tensor([[0.5, 0.3, 0.76, 0, 0, 0, 1.0]] * b)
     subgoals = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
-    for arm in ("nca", "cnn", "vis"):
+    for arm in ("nca", "cnn", "vin", "vis"):
         torch.manual_seed(0)
         pol = VLALiteLowLevel(field_source=arm, readout_mode="plan")
         for p in pol.parameters():            # break zero init
@@ -211,6 +212,35 @@ def test_k_and_overrides():
     except ValueError:
         pass
     print("K override + field overrides ok")
+
+
+def test_vin():
+    """VIN structure: [-V, Q] with V = max_a Q, grid-agnostic, K-dependent."""
+    b = 2
+    torch.manual_seed(0)
+    vin = VINField(ext_dim=77, n_actions=31)
+    for g in (32, 64):
+        ext = torch.randn(b, 77, g, g)
+        out = vin(ext, k_steps=8)
+        assert out.shape == (b, 32, g, g), g
+        assert torch.allclose(-out[:, 0], out[:, 1:].max(dim=1).values)
+    ext = torch.randn(b, 77, 32, 32)
+    assert not torch.allclose(vin(ext, k_steps=2)[:, 0],
+                              vin(ext, k_steps=16)[:, 0])
+    out1 = vin(ext, k_steps=1)                 # K=1: one backup from V_0=0
+    r = vin.reward(ext)
+    q1 = vin.q(torch.cat([r, torch.zeros_like(r)], dim=1))
+    assert torch.allclose(out1[:, 1:], q1)
+
+    tok = torch.randn(b, 256, 768)
+    states = torch.tensor([[0.5, 0.3, 0.76, 0, 0, 0, 1.0]] * b)
+    subgoals = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
+    pol = VLALiteLowLevel(field_source="vin").eval()
+    kw = dict(vis_tokens=tok, states=states, subgoals=subgoals,
+              sample_steps=1, noise=torch.zeros(b, 8, 7))
+    assert pol(**kw)["plan"].shape == (b, 32, 32)
+    assert pol(grid=64, k_steps=24, **kw)["field"].shape == (b, 32, 64, 64)
+    print("vin ok; params", count_parameters(vin))
 
 
 def test_resize_matches_interpolate():
@@ -299,6 +329,7 @@ if __name__ == "__main__":
     test_arm_init_parity()
     test_field_bandwidth()
     test_k_and_overrides()
+    test_vin()
     test_resize_matches_interpolate()
     test_goal_dropout_and_legacy_cnn()
     test_multi_wall_scene()
