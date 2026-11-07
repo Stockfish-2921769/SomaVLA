@@ -62,7 +62,8 @@ def make_policy(args, norm):
     pol = VLALiteLowLevel(field_source=args.arm, grid=args.grid,
                           chunk=8, action_dim=7,
                           readout_mode=args.readout,
-                          cnn_layers=args.cnn_layers)
+                          cnn_layers=args.cnn_layers,
+                          vis_input=args.vis_input)
     pol.set_norm(norm["st_mean"], norm["st_std"],
                  norm["ch_mean"], norm["ch_std"])
     pol.nca.k_steps = args.k_infer
@@ -93,9 +94,13 @@ def batch_loss(pol, batch, args, k_steps=None):
     loss = out["loss"]
     plan_loss = torch.zeros((), device=loss.device)
     mask = (batch["obstacle"] < 0.5).float()
-    # zero arm trains its NCA with the same plan supervision as nca, so the
-    # only difference between them is whether the decoder sees the field
-    if args.plan_weight > 0 and args.arm in {"nca", "cnn", "vin", "zero"}:
+    # every learned field generator gets the same auxiliary plan loss, so
+    # an arm gap cannot come from the loss alone; vision-only vis has no
+    # goal input and cannot express a goal-distance field, so it is exempt
+    plan_arms = {"nca", "cnn", "vin", "zero"}
+    if args.vis_input == "ext":
+        plan_arms.add("vis")
+    if args.plan_weight > 0 and args.arm in plan_arms:
         pred_plan = out["plan"]
         if pred_plan.ndim == 4:
             pred_plan = pred_plan[:, 0]
@@ -148,6 +153,9 @@ def main():
     ap.add_argument("--cnn-layers", type=int, default=12,
                     help="CNN depth; 12 = param/RF-matched to K=12, "
                          ">= G = global-RF control")
+    ap.add_argument("--vis-input", choices=["ext", "vision"], default="ext",
+                    help="vis arm input: ext = same 77-ch input as nca/cnn/"
+                         "vin; vision = 64 adapter channels only (ablation)")
     ap.add_argument("--plan-weight", type=float, default=0.1)
     ap.add_argument("--obs-weight", type=float, default=0.5)
     ap.add_argument("--field-dropout", type=float, default=0.1)
@@ -197,9 +205,9 @@ def main():
     ]
     if args.arm in {"nca", "zero"}:
         groups.append(dict(params=pol.nca.parameters(), lr=args.lr_nca))
-    if args.arm == "vis":
+    if args.arm == "vis":                  # field-generator lr, like nca/cnn
         groups.append(dict(params=pol.vis_field.parameters(),
-                           lr=args.lr_adapter))
+                           lr=args.lr_nca))
     if args.arm == "cnn":
         groups.append(dict(params=pol.cnn.parameters(), lr=args.lr_nca))
     if args.arm == "vin":

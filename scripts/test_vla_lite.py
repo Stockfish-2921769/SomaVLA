@@ -299,6 +299,45 @@ def test_goal_dropout_and_legacy_cnn():
     print("goal dropout / hide-goal / legacy CNN ok")
 
 
+def test_vis_inputs_and_param_table():
+    """vis sees the same ext as nca/cnn/vin; counts match task book 13.4."""
+    b = 2
+    tok = torch.randn(b, 256, 768)
+    states = torch.tensor([[0.5, 0.3, 0.76, 0, 0, 0, 1.0]] * b)
+    sg_a = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
+    sg_b = torch.tensor([[0.60, 0.50, 0.52, 0.0]] * b)
+    kw = dict(vis_tokens=tok, states=states, sample_steps=1,
+              noise=torch.zeros(b, 8, 7))
+    for vis_input, in_ch in (("ext", 77), ("vision", 64)):
+        torch.manual_seed(0)
+        pol = VLALiteLowLevel(field_source="vis", vis_input=vis_input)
+        assert pol.vis_field.in_channels == in_ch, vis_input
+        for p in pol.vis_field.parameters():
+            torch.nn.init.normal_(p, std=0.05)
+        pol.eval()
+        fa = pol(subgoals=sg_a, **kw)
+        fb = pol(subgoals=sg_b, **kw)
+        assert fa["plan"].shape == (b, 32, 32)
+        moved = not torch.allclose(fa["field"], fb["field"])
+        # ext carries goal offsets; vision-only cannot see the goal
+        assert moved == (vis_input == "ext"), vis_input
+
+    def n(m):
+        return sum(p.numel() for p in m.parameters())
+    counts = {
+        "nca": n(NCA()),
+        "cnn12": n(CNNField(ext_dim=77, layers=12)),
+        "cnn32": n(CNNField(ext_dim=77, layers=32)),
+        "vis_ext": n(VLALiteLowLevel(field_source="vis").vis_field),
+        "vis_vision": n(VLALiteLowLevel(field_source="vis",
+                                        vis_input="vision").vis_field),
+    }
+    print("  field-generator params", counts)
+    assert counts == {"nca": 106688, "cnn12": 135008, "cnn32": 321248,
+                      "vis_ext": 2496, "vis_vision": 2080}, counts
+    print("vis inputs + param table ok")
+
+
 def test_multi_wall_scene():
     import numpy as np
     from multi_task import _scene_reachable
@@ -332,6 +371,7 @@ if __name__ == "__main__":
     test_vin()
     test_resize_matches_interpolate()
     test_goal_dropout_and_legacy_cnn()
+    test_vis_inputs_and_param_table()
     test_multi_wall_scene()
     test_siglip()
     print("ALL OK")

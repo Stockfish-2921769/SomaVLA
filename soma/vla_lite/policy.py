@@ -6,7 +6,8 @@
 `readout_mode` controls field bandwidth into the decoder:
   full  learned generators (nca/cnn/vin) expose their whole 32-ch state; scalar
         sources (gt/euclid/random) fill channel 0 only; `vis` is the
-        equal-bandwidth no-iteration perception control.
+        no-spatial-computation control: a per-cell 1x1 projection of the
+        same 77-ch ext the other learned generators see, same width.
   plan  every arm exposes channel 0 (the plan scalar) only, so learned and
         scalar field sources are compared at identical bandwidth.
 
@@ -35,6 +36,9 @@ _ARM_ALIASES = {
 }
 
 READOUT_MODES = ("full", "plan")
+# vis arm input: "ext" = same 77-ch input as nca/cnn/vin (default);
+# "vision" = 64 adapter channels only (pilot-era ckpts, vision-only ablation)
+VIS_INPUTS = ("ext", "vision")
 # Inference-time probes (task book 7.3): hide the whole field, or replace
 # only its plan channel while keeping any latent channels.
 FIELD_OVERRIDES = ("zero", "plan-zero", "plan-gt", "plan-random")
@@ -44,7 +48,7 @@ class VLALiteLowLevel(nn.Module):
     def __init__(self, vision=None, field_source="nca", grid=32,
                  vis_dim=768, vision_ch=64, task_dim=8, n_tasks=1,
                  d=256, chunk=8, action_dim=7, readout_mode="full",
-                 cnn_layers=12, cnn_channels=32):
+                 cnn_layers=12, cnn_channels=32, vis_input="ext"):
         super().__init__()
         arm = _ARM_ALIASES.get(field_source.lower(), field_source.lower())
         if arm not in {"nca", "gt", "euclid", "cnn", "vin", "vis",
@@ -52,7 +56,10 @@ class VLALiteLowLevel(nn.Module):
             raise ValueError(f"unknown field_source {field_source!r}")
         if readout_mode not in READOUT_MODES:
             raise ValueError(f"unknown readout_mode {readout_mode!r}")
+        if vis_input not in VIS_INPUTS:
+            raise ValueError(f"unknown vis_input {vis_input!r}")
         self.field_source = arm
+        self.vis_input = vis_input
         self.readout_mode = readout_mode
         self.grid = grid
         self.vision = vision
@@ -74,9 +81,12 @@ class VLALiteLowLevel(nn.Module):
                              n_actions=self.nca.channels - 1)
                     if arm == "vin" else None)
         self.euclid = EuclidField() if arm == "euclid" else None
-        # equal-bandwidth perception control: raw adapter features through the
-        # same readout, no iterative field computation
-        self.vis_field = nn.Conv2d(vision_ch, 32, 1) if arm == "vis" else None
+        # no-spatial-computation control: same inputs and output width as the
+        # learned generators, but each cell is projected on its own (no
+        # neighbours, no iteration); NCA - vis isolates spatial computation
+        vis_in = self.nca.ext_dim if vis_input == "ext" else vision_ch
+        self.vis_field = (nn.Conv2d(vis_in, self.nca.channels, 1)
+                          if arm == "vis" else None)
         self.register_buffer("st_mean", torch.zeros(7))
         self.register_buffer("st_std", torch.ones(7))
         self.register_buffer("ch_mean", torch.zeros(4))
@@ -153,6 +163,11 @@ class VLALiteLowLevel(nn.Module):
             field = self.vin(ext, k_steps=(self.nca.k_steps if k_steps is None
                                            else k_steps))
             plan = field[:, 0]
+        elif self.field_source == "vis":
+            src = (self.nca.make_ext(feat, p_obs, goal_xy, start_xy, task8)
+                   if self.vis_input == "ext" else feat)
+            field = self.vis_field(src)
+            plan = field[:, 0]
         elif self.field_source == "gt":
             if gt_plan is None or gt_obstacle is None:
                 raise ValueError("gt arm needs gt_plan and gt_obstacle")
@@ -165,11 +180,9 @@ class VLALiteLowLevel(nn.Module):
                 plan = self.euclid(goal_xy, grid)
             elif self.field_source == "random":
                 plan = random_smooth_field(b, grid, feat.device, feat.dtype)
-            else:                                   # vis / none
+            else:                                   # none
                 plan = feat.new_zeros(b, 1, grid, grid)
-            if self.field_source == "vis":
-                field = self.vis_field(feat)
-            elif self.field_source != "none":
+            if self.field_source != "none":
                 field = feat.new_zeros(b, 32, grid, grid)
                 field[:, :1] = plan
 

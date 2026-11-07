@@ -198,7 +198,8 @@ def predict_chunks(pol, vision, eps, scenes, act_mean, act_std,
     st = torch.from_numpy(np.stack([e.state for e in eps])).float().to(dev)
     sg = torch.from_numpy(np.stack([e.cmd for e in eps])).float().to(dev)
 
-    has_plan = pol.field_source in {"nca", "cnn", "vin", "zero"}
+    has_plan = pol.field_source in {"nca", "cnn", "vin", "zero"} or (
+        pol.field_source == "vis" and pol.vis_input == "ext")
     want_gt = pol.field_source == "gt" or field_override == "plan-gt" or (
         diag and has_plan)
     gt_plan = gt_obs = None
@@ -290,10 +291,14 @@ def main():
     # pilot-era CNN ckpts emit the plan scalar only (cnn.out: 1 channel)
     cnn_w = ck["model"].get("cnn.out.weight")
     cnn_channels = cnn_w.shape[0] if cnn_w is not None else 32
+    # pilot-era vis ckpts project the 64 vision channels only (no ext)
+    vis_w = ck["model"].get("vis_field.weight")
+    vis_input = ("vision" if vis_w is not None and vis_w.shape[1] == 64
+                 else "ext")
     pol = VLALiteLowLevel(field_source=arm, grid=grid, chunk=8, action_dim=7,
                           readout_mode=readout,
                           cnn_layers=ca.get("cnn_layers", 12),
-                          cnn_channels=cnn_channels)
+                          cnn_channels=cnn_channels, vis_input=vis_input)
     norm = ck["norm"]
     pol.set_norm(norm["st_mean"], norm["st_std"],
                  norm["ch_mean"], norm["ch_std"])
@@ -522,6 +527,7 @@ def main():
                                   else None),
                 "grid": grid, "train_grid": train_grid, "k_steps": k_eval,
                 "readout": readout, "field_override": args.field_override,
+                "vis_input": vis_input if arm == "vis" else None,
                 "hide_goal": args.hide_goal,
                 "visit_log": [results[i].visit_log for i in range(n)],
                 "n": n, "success": succ, "placed": placed, "bumps": bumps,
