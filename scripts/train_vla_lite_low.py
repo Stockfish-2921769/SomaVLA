@@ -96,7 +96,8 @@ def batch_loss(pol, batch, args, k_steps=None):
     mask = (batch["obstacle"] < 0.5).float()
     # every learned field generator gets the same auxiliary plan loss, so
     # an arm gap cannot come from the loss alone; vision-only vis has no
-    # goal input and cannot express a goal-distance field, so it is exempt
+    # goal input and cannot express a goal-distance field, so it is exempt;
+    # visgt's channel 0 already is the GT plan
     plan_arms = {"nca", "cnn", "vin", "zero"}
     if args.vis_input == "ext":
         plan_arms.add("vis")
@@ -137,7 +138,7 @@ def main():
     ap.add_argument("--feat", default="data/feat_low_fp16.npy")
     ap.add_argument("--arm", default="nca",
                     choices=["nca", "cnn", "vin", "euclid", "gt", "vis",
-                             "none", "zero", "random"])
+                             "visgt", "none", "zero", "random"])
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--steps", type=int, default=20000)
     ap.add_argument("--batch", type=int, default=64)
@@ -205,7 +206,7 @@ def main():
     ]
     if args.arm in {"nca", "zero"}:
         groups.append(dict(params=pol.nca.parameters(), lr=args.lr_nca))
-    if args.arm == "vis":                  # field-generator lr, like nca/cnn
+    if args.arm in {"vis", "visgt"}:       # field-generator lr, like nca/cnn
         groups.append(dict(params=pol.vis_field.parameters(),
                            lr=args.lr_nca))
     if args.arm == "cnn":

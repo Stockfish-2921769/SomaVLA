@@ -200,7 +200,8 @@ def predict_chunks(pol, vision, eps, scenes, act_mean, act_std,
 
     has_plan = pol.field_source in {"nca", "cnn", "vin", "zero"} or (
         pol.field_source == "vis" and pol.vis_input == "ext")
-    want_gt = pol.field_source == "gt" or field_override == "plan-gt" or (
+    gt_arm = pol.field_source in {"gt", "visgt"}
+    want_gt = gt_arm or field_override == "plan-gt" or (
         diag and has_plan)
     gt_plan = gt_obs = None
     if want_gt:
@@ -209,7 +210,7 @@ def predict_chunks(pol, vision, eps, scenes, act_mean, act_std,
         gt_obs = torch.from_numpy(np.stack([f[1] for f in fields])).to(dev)
 
     kw = {}
-    if pol.field_source == "gt" or field_override == "plan-gt":
+    if gt_arm or field_override == "plan-gt":
         kw = dict(gt_plan=gt_plan, gt_obstacle=gt_obs)
     noise = None
     if det_noise:
@@ -527,7 +528,8 @@ def main():
                                   else None),
                 "grid": grid, "train_grid": train_grid, "k_steps": k_eval,
                 "readout": readout, "field_override": args.field_override,
-                "vis_input": vis_input if arm == "vis" else None,
+                "vis_input": (vis_input if arm in ("vis", "visgt")
+                              else None),
                 "hide_goal": args.hide_goal,
                 "visit_log": [results[i].visit_log for i in range(n)],
                 "n": n, "success": succ, "placed": placed, "bumps": bumps,

@@ -7,7 +7,9 @@
   full  learned generators (nca/cnn/vin) expose their whole 32-ch state; scalar
         sources (gt/euclid/random) fill channel 0 only; `vis` is the
         no-spatial-computation control: a per-cell 1x1 projection of the
-        same 77-ch ext the other learned generators see, same width.
+        same 77-ch ext the other learned generators see, same width;
+        `visgt` is vis with channel 0 replaced by the GT geodesic plan,
+        the planning ceiling on top of the vis pathway.
   plan  every arm exposes channel 0 (the plan scalar) only, so learned and
         scalar field sources are compared at identical bandwidth.
 
@@ -32,7 +34,7 @@ _ARM_ALIASES = {
     "feat": "vis", "none": "none", "nofield": "none", "no-field": "none",
     "zero": "zero", "zerofield": "zero", "zero-field": "zero",
     "random": "random", "randomfield": "random", "random-field": "random",
-    "vin": "vin",
+    "vin": "vin", "visgt": "visgt", "vis-gt": "visgt", "vis+gt": "visgt",
 }
 
 READOUT_MODES = ("full", "plan")
@@ -51,7 +53,7 @@ class VLALiteLowLevel(nn.Module):
                  cnn_layers=12, cnn_channels=32, vis_input="ext"):
         super().__init__()
         arm = _ARM_ALIASES.get(field_source.lower(), field_source.lower())
-        if arm not in {"nca", "gt", "euclid", "cnn", "vin", "vis",
+        if arm not in {"nca", "gt", "euclid", "cnn", "vin", "vis", "visgt",
                        "none", "zero", "random"}:
             raise ValueError(f"unknown field_source {field_source!r}")
         if readout_mode not in READOUT_MODES:
@@ -86,7 +88,7 @@ class VLALiteLowLevel(nn.Module):
         # neighbours, no iteration); NCA - vis isolates spatial computation
         vis_in = self.nca.ext_dim if vis_input == "ext" else vision_ch
         self.vis_field = (nn.Conv2d(vis_in, self.nca.channels, 1)
-                          if arm == "vis" else None)
+                          if arm in {"vis", "visgt"} else None)
         self.register_buffer("st_mean", torch.zeros(7))
         self.register_buffer("st_std", torch.ones(7))
         self.register_buffer("ch_mean", torch.zeros(4))
@@ -163,11 +165,18 @@ class VLALiteLowLevel(nn.Module):
             field = self.vin(ext, k_steps=(self.nca.k_steps if k_steps is None
                                            else k_steps))
             plan = field[:, 0]
-        elif self.field_source == "vis":
+        elif self.field_source in {"vis", "visgt"}:
             src = (self.nca.make_ext(feat, p_obs, goal_xy, start_xy, task8)
                    if self.vis_input == "ext" else feat)
             field = self.vis_field(src)
             plan = field[:, 0]
+            if self.field_source == "visgt":
+                # perfect plan in channel 0, vis pathway (built from the
+                # predicted obstacles) in channels 1..31
+                if gt_plan is None:
+                    raise ValueError("visgt arm needs gt_plan")
+                plan = gt_plan.to(field.dtype)
+                field = torch.cat([plan.unsqueeze(1), field[:, 1:]], dim=1)
         elif self.field_source == "gt":
             if gt_plan is None or gt_obstacle is None:
                 raise ValueError("gt arm needs gt_plan and gt_obstacle")

@@ -1210,3 +1210,53 @@ ckpt 仍可加载，但其结果（投影层未训练）不并入任何结论。
 **算力对照（尚未实现）**：“不共享权重的展开 NCA”——K 份与 NCA 规则同构、
 权重独立的层，每层同样重新注入 ext；与 NCA 只差权重共享。K=12 时约 1.28M
 参数。只在 G1b 表明规划场被使用、进入 G2 时才需要。
+
+### 13.5 规划上限臂 visgt 与逐 visit 分析（2026-11-10）
+
+依据 `reports/VLA_LITE_VIS_CONTROL.md`：对齐的 vis（无空间计算）相对无场已有
++13.5 pp（5/5），NCA 只再多 +8.1 pp（3/5，t=1.30）。vis 的 plan 通道不可能是测地场，
+所以这部分收益不是规划。剩下的问题是：**在已经看得见场景的低层上，规划还有没有
+提升空间？**
+
+**visgt 臂**（`--arm visgt`）：与 vis 完全相同（77 通道 ext、1×1 投影、32 通道、
+同读出/解码器），只把通道 0 换成 GT 测地场（训练用数据里的 plan，评估时按下发的
+子目标在线计算）。通道 1–31 仍来自预测障碍的 vis 通路。不施加 plan 损失
+（通道 0 已是 GT）。
+
+试点的 `gt` 臂不能回答这个问题：它只给解码器一个 plan 通道、**没有任何视觉**，
+“GT −9 pp”混着“没有视觉”。visgt 把“完美规划”加在 vis 之上，比较才干净。
+
+**判读**（headroom = visgt − vis，seed 层统计）：
+
+| 结果 | 含义 | 下一步 |
+|---|---|---|
+| visgt ≈ vis | 本任务在 vis 之上没有规划空间；NCA−vis 若为真，也不是“更好的规划” | 规划主张只能在任务 v2 检验；v2 的第一道门就是 visgt ≫ vis |
+| visgt ≫ vis | 有规划空间 | 用 (nca − vis) / (visgt − vis) 报告 NCA 兑现了多少 |
+| visgt < vis | 解码器不会用 GT plan（接口问题） | 先查读出/尺度，不比较场源 |
+
+注意：评估时 GT 场按**下发的子目标**计算，所以它是“对给定命令的完美规划”，
+不纠正高层选错的目标；GT 场用 oracle 障碍。
+
+**逐 visit 分析**（`scripts/analyze_visit_log.py`，只需 CPU，用现有评估 JSON）：
+把每个 visit 按高层命令相对 teacher 分三桶——`on`（同一候选、误差在容差内）、
+`off`（同一候选、超出抓取半径 2.5 cm / 放置容差 2.0 cm）、`wrong`（指向其他候选），
+比较各臂在每桶的完成率。关键统计是 `off-on`：某臂相对 none 在 off 桶的增益
+减去在 on 桶的增益（seed 层差中差）。显著为正 → 低层在用视觉纠正偏了的目标。
+
+```bash
+# 现有 recheck_* / conf_vis_* 评估 JSON（含 visit_log）
+$PY scripts/analyze_visit_log.py --json-out reports/VLA_LITE_VISIT_LOG.json
+$PY scripts/analyze_visit_log.py --kind pick    # 只看抓取 visit
+
+# visgt 5 seed（与 vis 同参数；建议与 vis 在同一提交上训练）
+for s in 0 1 2 3 4; do
+  $PY scripts/train_vla_lite_low.py --arm visgt --seed $s --steps 20000 \
+    --batch 64 --k-steps 12 --out ckpts/vla_lite/conf_visgt_s$s
+  $PY scripts/eval_vla_lite.py --ckpt ckpts/vla_lite/conf_visgt_s$s/last.pt \
+    --high-ckpt ckpts/vla_lite/high_s0/last.pt --n-episodes 200 \
+    --json-out logs/vla_lite/conf_visgt_s${s}_pred.json
+done
+$PY scripts/analyze_vla_lite_5seed.py \
+  --prefix-map vis=conf visgt=conf none=recheck nca=recheck \
+  --pairs visgt:vis nca:vis visgt:nca
+```

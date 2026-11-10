@@ -99,8 +99,8 @@ def test_policy_arms():
     subgoals = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
     gt_plan = torch.rand(b, 32, 32)
     gt_obs = (torch.rand(b, 32, 32) > 0.7).float()
-    for arm in ["nca", "gt", "euclid", "cnn", "vin", "vis", "none", "zero",
-                "random"]:
+    for arm in ["nca", "gt", "euclid", "cnn", "vin", "vis", "visgt", "none",
+                "zero", "random"]:
         pol = VLALiteLowLevel(field_source=arm)
         pol.set_norm(torch.zeros(7), torch.ones(7),
                      torch.zeros(4), torch.ones(4))
@@ -131,7 +131,8 @@ def test_policy_arms():
 
 def test_arm_init_parity():
     """Shared stack must be init-identical across arms for a fixed seed."""
-    arms = ["nca", "none", "zero", "random", "euclid", "cnn", "vin", "vis"]
+    arms = ["nca", "none", "zero", "random", "euclid", "cnn", "vin", "vis",
+            "visgt"]
     shared = {"adapter", "nca", "readout", "decoder", "language"}
     ref = None
     for arm in arms:
@@ -338,6 +339,58 @@ def test_vis_inputs_and_param_table():
     print("vis inputs + param table ok")
 
 
+def test_visgt():
+    """visgt = vis pathway in channels 1..31, GT plan in channel 0."""
+    b = 2
+    tok = torch.randn(b, 256, 768)
+    states = torch.tensor([[0.5, 0.3, 0.76, 0, 0, 0, 1.0]] * b)
+    subgoals = torch.tensor([[0.45, 0.35, 0.52, 0.0]] * b)
+    gt_plan = torch.rand(b, 32, 32)
+    kw = dict(vis_tokens=tok, states=states, subgoals=subgoals,
+              sample_steps=1, noise=torch.zeros(b, 8, 7))
+    outs = {}
+    for arm in ("vis", "visgt"):
+        torch.manual_seed(0)
+        pol = VLALiteLowLevel(field_source=arm)
+        pol.eval()
+        outs[arm] = pol(gt_plan=gt_plan, **kw)
+    assert torch.allclose(outs["visgt"]["field"][:, 0], gt_plan)
+    assert torch.allclose(outs["visgt"]["field"][:, 1:],
+                          outs["vis"]["field"][:, 1:])
+    assert outs["visgt"]["plan"].shape == (b, 32, 32)
+    try:
+        pol(**kw)
+        raise AssertionError("visgt without gt_plan should fail")
+    except ValueError:
+        pass
+    print("visgt ok")
+
+
+def test_visit_log_buckets():
+    from analyze_visit_log import BUCKETS, bucket, seed_stats, summarize
+    v = lambda **k: dict(dict(same_choice=True, attached=False, xy_err=0.0,
+                              ok=True, finished=True), **k)
+    visits = [
+        v(same_choice=False),                     # wrong
+        v(xy_err=0.030),                          # pick off (> 2.5 cm)
+        v(xy_err=0.022),                          # pick on
+        v(attached=True, xy_err=0.022, ok=False),  # carry off (> 2.0 cm)
+        v(attached=True, xy_err=0.015),           # carry on
+        v(finished=False, ok=False),              # cut by budget: excluded
+    ]
+    assert [bucket(x, 0.025, 0.020) for x in visits[:5]] == \
+        ["wrong", "off", "on", "off", "on"]
+    s = summarize(visits, 0.025, 0.020)
+    assert s["n_visits"] == 5 and s["n_unfinished"] == 1
+    assert s["all/off"] == dict(n=2, ok=1)
+    assert s["all/on"] == dict(n=2, ok=2)
+    assert s["carry/off"] == dict(n=1, ok=0)
+    assert set(BUCKETS) == {"on", "off", "wrong"}
+    st = seed_stats([1.0, 2.0, 3.0, float("nan")])
+    assert st["n"] == 3 and abs(st["mean"] - 2.0) < 1e-9 and st["n_pos"] == 3
+    print("visit-log buckets ok")
+
+
 def test_multi_wall_scene():
     import numpy as np
     from multi_task import _scene_reachable
@@ -372,6 +425,8 @@ if __name__ == "__main__":
     test_resize_matches_interpolate()
     test_goal_dropout_and_legacy_cnn()
     test_vis_inputs_and_param_table()
+    test_visgt()
+    test_visit_log_buckets()
     test_multi_wall_scene()
     test_siglip()
     print("ALL OK")
