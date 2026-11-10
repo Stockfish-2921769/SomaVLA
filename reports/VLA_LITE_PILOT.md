@@ -4,6 +4,7 @@
 > 状态：试点（pilot）完成，主协议修正待确认
 > 关联：`VLA_LITE_TASK.md`（任务书）、`REPORT_FIELD_INJECTION.md`（E0 方案评估）、
 > 代码 `soma/vla_lite/`、脚本 `scripts/*_vla_lite*.py`
+> 后续：`VLA_LITE_VIS_CONTROL.md`（vis 对齐对照，2026-11-10，分支 `fix/vla-lite-g2-design`）
 >
 > **结论先行**：在无 LLM 的 VLA-lite 上，NCA 场对低层策略有稳定正贡献
 > （5/5 训练 seed 为正，+22.1pp，池化 95% CI [+18.5, +25.7]）；
